@@ -1,0 +1,176 @@
+# Reusable Metadata Gates Workflow
+#
+# Runs the Metadata Architect CI/CD gates for a data asset:
+#   Gate 1 — Context-First: verifies the asset has an approved Statement of Intent
+#   Gate 2 — Jargon Scrubber: validates the SoI prose against ISO 24495-1
+#
+# Usage in a caller workflow:
+#
+#   jobs:
+#     metadata-check:
+#       uses: ./.github/workflows/metadata-gates.yml
+#       with:
+#         asset_name: "finance.global_revenue_agg_v1"
+#         source_system: "postgres"
+#         soi_text: "This table stores daily revenue totals by region."
+#       secrets:
+#         gate_api_key: ${{ secrets.METADATA_GATE_API_KEY }}
+#         metadata_api_url: ${{ secrets.METADATA_API_URL }}
+
+on:
+  workflow_call:
+    inputs:
+      asset_name:
+        required: true
+        type: string
+        description: "Fully-qualified asset name, e.g. finance.global_revenue_v1"
+      source_system:
+        required: false
+        type: string
+        default: ""
+        description: "Source system identifier, e.g. postgres"
+      soi_text:
+        required: false
+        type: string
+        default: ""
+        description: "SoI text to scrub (Gate 2). Omit to skip Gate 2."
+      fail_on_jargon_violation:
+        required: false
+        type: boolean
+        default: true
+        description: "Block the pipeline on jargon violations. Set false for warnings only."
+      glossary_json:
+        required: false
+        type: string
+        default: "{}"
+        description: "JSON object of known terms to whitelist in Gate 2."
+    secrets:
+      gate_api_key:
+        required: true
+        description: "X-Gate-API-Key for the Metadata Architect API"
+      metadata_api_url:
+        required: true
+        description: "Base URL of the Metadata Architect API, e.g. https://metadata.internal"
+
+jobs:
+  # --------------------------------------------------------------------------
+  # Gate 1 — Context-First
+  # --------------------------------------------------------------------------
+  gate-context-first:
+    name: "Gate 1 — Context-First"
+    runs-on: ubuntu-latest
+    outputs:
+      passed: ${{ steps.check.outputs.passed }}
+      status: ${{ steps.check.outputs.status }}
+      tdk_score: ${{ steps.check.outputs.tdk_score }}
+      message: ${{ steps.check.outputs.message }}
+
+    steps:
+      - name: Call Context-First gate
+        id: check
+        env:
+          GATE_API_KEY: ${{ secrets.gate_api_key }}
+          METADATA_API_URL: ${{ secrets.metadata_api_url }}
+          ASSET_NAME: ${{ inputs.asset_name }}
+          SOURCE_SYSTEM: ${{ inputs.source_system }}
+        run: |
+          PAYLOAD=$(jq -n \
+            --arg asset_name "$ASSET_NAME" \
+            --arg source_system "$SOURCE_SYSTEM" \
+            '{asset_name: $asset_name, source_system: (if $source_system == "" then null else $source_system end)}')
+
+          RESPONSE=$(curl -sf \
+            -X POST "$METADATA_API_URL/gates/context-first" \
+            -H "Content-Type: application/json" \
+            -H "X-Gate-API-Key: $GATE_API_KEY" \
+            -d "$PAYLOAD")
+
+          echo "Response: $RESPONSE"
+
+          PASSED=$(echo "$RESPONSE" | jq -r '.passed')
+          STATUS=$(echo "$RESPONSE" | jq -r '.status')
+          TDK=$(echo "$RESPONSE" | jq -r '.tdk_score // "n/a"')
+          MESSAGE=$(echo "$RESPONSE" | jq -r '.message')
+
+          echo "passed=$PASSED"   >> "$GITHUB_OUTPUT"
+          echo "status=$STATUS"   >> "$GITHUB_OUTPUT"
+          echo "tdk_score=$TDK"   >> "$GITHUB_OUTPUT"
+          echo "message=$MESSAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Fail if gate did not pass
+        if: steps.check.outputs.passed != 'true'
+        run: |
+          echo "::error title=Gate 1 — Context-First Failed::${{ steps.check.outputs.message }}"
+          echo "Asset: ${{ inputs.asset_name }}"
+          echo "Status: ${{ steps.check.outputs.status }}"
+          exit 1
+
+      - name: Report TDK score
+        if: steps.check.outputs.passed == 'true'
+        run: |
+          echo "::notice title=Gate 1 Passed::${{ steps.check.outputs.message }} TDK=${{ steps.check.outputs.tdk_score }}"
+
+  # --------------------------------------------------------------------------
+  # Gate 2 — Jargon Scrubber (optional — skipped when soi_text is empty)
+  # --------------------------------------------------------------------------
+  gate-jargon-scrub:
+    name: "Gate 2 — Jargon Scrubber"
+    runs-on: ubuntu-latest
+    if: inputs.soi_text != ''
+    needs: gate-context-first
+    outputs:
+      passed: ${{ steps.scrub.outputs.passed }}
+      violation_count: ${{ steps.scrub.outputs.violation_count }}
+      message: ${{ steps.scrub.outputs.message }}
+
+    steps:
+      - name: Call Jargon Scrub gate
+        id: scrub
+        env:
+          GATE_API_KEY: ${{ secrets.gate_api_key }}
+          METADATA_API_URL: ${{ secrets.metadata_api_url }}
+          SOI_TEXT: ${{ inputs.soi_text }}
+          GLOSSARY_JSON: ${{ inputs.glossary_json }}
+          FAIL_ON_VIOLATION: ${{ inputs.fail_on_jargon_violation }}
+        run: |
+          PAYLOAD=$(jq -n \
+            --arg soi_text "$SOI_TEXT" \
+            --argjson glossary "$GLOSSARY_JSON" \
+            --argjson fail_on "$FAIL_ON_VIOLATION" \
+            '{soi_text: $soi_text, glossary: $glossary, fail_on_violation: $fail_on}')
+
+          RESPONSE=$(curl -sf \
+            -X POST "$METADATA_API_URL/gates/jargon-scrub" \
+            -H "Content-Type: application/json" \
+            -H "X-Gate-API-Key: $GATE_API_KEY" \
+            -d "$PAYLOAD")
+
+          echo "Response: $RESPONSE"
+
+          PASSED=$(echo "$RESPONSE" | jq -r '.passed')
+          COUNT=$(echo "$RESPONSE" | jq -r '.violation_count')
+          MESSAGE=$(echo "$RESPONSE" | jq -r '.message')
+
+          echo "passed=$PASSED"           >> "$GITHUB_OUTPUT"
+          echo "violation_count=$COUNT"   >> "$GITHUB_OUTPUT"
+          echo "message=$MESSAGE"         >> "$GITHUB_OUTPUT"
+
+          # Emit each violation as a warning annotation
+          echo "$RESPONSE" | jq -c '.violations[]' | while read -r v; do
+            TERM=$(echo "$v" | jq -r '.term')
+            RULE=$(echo "$v" | jq -r '.rule_violated')
+            SUGGESTION=$(echo "$v" | jq -r '.suggestion')
+            echo "::warning title=Jargon Violation [$RULE]::Term: \"$TERM\" — Suggestion: $SUGGESTION"
+          done
+
+      - name: Fail if gate did not pass
+        if: steps.scrub.outputs.passed != 'true'
+        run: |
+          echo "::error title=Gate 2 — Jargon Scrub Failed::${{ steps.scrub.outputs.message }}"
+          echo "Violations: ${{ steps.scrub.outputs.violation_count }}"
+          exit 1
+
+      - name: Report pass
+        if: steps.scrub.outputs.passed == 'true'
+        run: |
+          echo "::notice title=Gate 2 Passed::${{ steps.scrub.outputs.message }}"

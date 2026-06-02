@@ -1,0 +1,114 @@
+# Metadata Architect CI/CD Gates — GitLab CI include template
+#
+# Include in your .gitlab-ci.yml:
+#
+#   include:
+#     - project: 'your-group/metadata-architect'
+#       file: '.gitlab/metadata-gates.gitlab-ci.yml'
+#
+# Then call the hidden jobs by extending them:
+#
+#   check-metadata:
+#     extends: .metadata-gate-context-first
+#     variables:
+#       ASSET_NAME: "finance.global_revenue_agg_v1"
+#       SOURCE_SYSTEM: "postgres"
+#
+# Required CI/CD variables (set in project or group settings):
+#   METADATA_GATE_API_KEY  — X-Gate-API-Key for the Metadata Architect API
+#   METADATA_API_URL       — Base URL, e.g. https://metadata.internal
+
+# ---------------------------------------------------------------------------
+# Gate 1 — Context-First
+# ---------------------------------------------------------------------------
+.metadata-gate-context-first:
+  image: alpine:3.19
+  stage: test
+  variables:
+    ASSET_NAME: ""
+    SOURCE_SYSTEM: ""
+  before_script:
+    - apk add --no-cache curl jq
+  script:
+    - |
+      if [ -z "$ASSET_NAME" ]; then
+        echo "ERROR: ASSET_NAME variable is required."
+        exit 1
+      fi
+
+      PAYLOAD=$(jq -n \
+        --arg asset_name "$ASSET_NAME" \
+        --arg source_system "$SOURCE_SYSTEM" \
+        '{asset_name: $asset_name, source_system: (if $source_system == "" then null else $source_system end)}')
+
+      echo "Checking asset: $ASSET_NAME"
+
+      RESPONSE=$(curl -sf \
+        -X POST "$METADATA_API_URL/gates/context-first" \
+        -H "Content-Type: application/json" \
+        -H "X-Gate-API-Key: $METADATA_GATE_API_KEY" \
+        -d "$PAYLOAD")
+
+      PASSED=$(echo "$RESPONSE" | jq -r '.passed')
+      STATUS=$(echo "$RESPONSE" | jq -r '.status')
+      TDK=$(echo "$RESPONSE" | jq -r '.tdk_score // "n/a"')
+      MESSAGE=$(echo "$RESPONSE" | jq -r '.message')
+
+      echo "Gate 1 result: passed=$PASSED status=$STATUS tdk=$TDK"
+      echo "$MESSAGE"
+
+      if [ "$PASSED" != "true" ]; then
+        echo ""
+        echo "GATE 1 FAILED: $MESSAGE"
+        exit 1
+      fi
+  allow_failure: false
+
+# ---------------------------------------------------------------------------
+# Gate 2 — Jargon Scrubber
+# ---------------------------------------------------------------------------
+.metadata-gate-jargon-scrub:
+  image: alpine:3.19
+  stage: test
+  variables:
+    SOI_TEXT: ""
+    GLOSSARY_JSON: "{}"
+    FAIL_ON_VIOLATION: "true"
+  before_script:
+    - apk add --no-cache curl jq
+  script:
+    - |
+      if [ -z "$SOI_TEXT" ]; then
+        echo "SOI_TEXT is empty — skipping Gate 2."
+        exit 0
+      fi
+
+      PAYLOAD=$(jq -n \
+        --arg soi_text "$SOI_TEXT" \
+        --argjson glossary "$GLOSSARY_JSON" \
+        --argjson fail_on "$FAIL_ON_VIOLATION" \
+        '{soi_text: $soi_text, glossary: $glossary, fail_on_violation: $fail_on}')
+
+      echo "Running jargon scrub..."
+
+      RESPONSE=$(curl -sf \
+        -X POST "$METADATA_API_URL/gates/jargon-scrub" \
+        -H "Content-Type: application/json" \
+        -H "X-Gate-API-Key: $METADATA_GATE_API_KEY" \
+        -d "$PAYLOAD")
+
+      PASSED=$(echo "$RESPONSE" | jq -r '.passed')
+      COUNT=$(echo "$RESPONSE" | jq -r '.violation_count')
+      MESSAGE=$(echo "$RESPONSE" | jq -r '.message')
+
+      echo "Gate 2 result: passed=$PASSED violations=$COUNT"
+
+      # Print each violation
+      echo "$RESPONSE" | jq -r '.violations[] | "  [\(.rule_violated)] \(.term) at pos \(.char_position) — \(.suggestion)"'
+
+      if [ "$PASSED" != "true" ]; then
+        echo ""
+        echo "GATE 2 FAILED: $MESSAGE"
+        exit 1
+      fi
+  allow_failure: false

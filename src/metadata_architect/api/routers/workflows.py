@@ -138,7 +138,7 @@ async def approve_workflow(
     draft = workflow.draft
     tdk_score = await _record_tdk_score(db, workflow, TdkScoreEvent.SME_APPROVED, sla_met=True)
 
-    policy = _emit_and_store_policy(workflow, draft, WorkflowStatus.SME_APPROVED.value, tdk_score)
+    policy = await _emit_and_store_policy(workflow, draft, WorkflowStatus.SME_APPROVED.value, tdk_score)
     await db.commit()
 
     await _send_notification(
@@ -192,7 +192,7 @@ async def edit_and_approve_workflow(
 
     tdk_score = await _record_tdk_score(db, workflow, TdkScoreEvent.SME_EDITED, sla_met=True)
 
-    policy = _emit_and_store_policy(workflow, draft, WorkflowStatus.SME_APPROVED.value, tdk_score)
+    policy = await _emit_and_store_policy(workflow, draft, WorkflowStatus.SME_APPROVED.value, tdk_score)
     await db.commit()
 
     # Queue offline edit analysis (training data pipeline — Phase 6)
@@ -339,14 +339,14 @@ async def _record_tdk_score(
     return breakdown.composite_score
 
 
-def _emit_and_store_policy(
+async def _emit_and_store_policy(
     workflow: SmeWorkflow,
     draft,
     verification_status: str,
     tdk_score: float,
 ) -> object:
-    """Emit YAML policy. MinIO upload is stubbed — wired fully in Phase 5."""
-    return _emitter.emit(
+    """Emit YAML policy and upload to MinIO. Upload failures are non-fatal."""
+    doc = _emitter.emit(
         asset_id=workflow.asset_id,
         asset_name=workflow.asset.asset_name,
         statement_of_intent=draft.statement_of_intent if draft else "",
@@ -362,6 +362,8 @@ def _emit_and_store_policy(
             if draft and draft.jargon_violations else True
         ),
     )
+    await _emitter.upload(doc, draft_version=draft.version if draft else 1)
+    return doc
 
 
 def _build_diff(original: str, corrected: str, reason: str | None) -> str:

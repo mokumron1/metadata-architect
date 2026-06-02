@@ -13,16 +13,18 @@ Output format matches the Universal Service Catalog spec from the functional spe
     tdk_initial_score: 0.85
     verification_status: "SME_APPROVED"
 
-The emitted YAML is stored in MinIO (bucket: policy-outputs) and
-can be committed back to source repos via the GitHub API (Phase 4).
+The emitted YAML is stored in MinIO (bucket: policy-outputs).
 """
 
 import io
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from ruamel.yaml import YAML
+
+log = logging.getLogger(__name__)
 
 _yaml = YAML()
 _yaml.default_flow_style = False
@@ -110,3 +112,39 @@ class PolicyEmitter:
     def object_key(self, asset_id: uuid.UUID, draft_version: int) -> str:
         """MinIO/S3 object key for this policy document."""
         return f"policies/{asset_id}/v{draft_version:04d}/policy.yaml"
+
+    async def upload(self, doc: PolicyDocument, draft_version: int) -> str | None:
+        """
+        Upload the policy YAML to MinIO.  Returns the object key on success,
+        or None if MinIO is not reachable (graceful degradation for dev/test).
+        """
+        try:
+            from miniopy_async import Minio  # type: ignore[import-untyped]
+            from metadata_architect.config import get_settings
+
+            settings = get_settings()
+            client = Minio(
+                settings.minio_endpoint,
+                access_key=settings.minio_access_key,
+                secret_key=settings.minio_secret_key,
+                secure=settings.minio_secure,
+            )
+
+            bucket = settings.minio_bucket_policy
+            if not await client.bucket_exists(bucket):
+                await client.make_bucket(bucket)
+
+            key = self.object_key(uuid.UUID(doc.asset_id), draft_version)
+            data = doc.raw_yaml.encode()
+            await client.put_object(
+                bucket,
+                key,
+                io.BytesIO(data),
+                length=len(data),
+                content_type="application/yaml",
+            )
+            log.info("policy_uploaded bucket=%s key=%s", bucket, key)
+            return key
+        except Exception as exc:
+            log.warning("minio_upload_skipped reason=%s", exc)
+            return None
