@@ -12,8 +12,11 @@ SoI Studio — interactive Statement of Intent generator.
 POST /studio/generate   — accepts a physical name, data type, and a business hint,
                           then returns 3 candidate Statements of Intent scored with
                           the TDK clarity formula and a quick jargon check.
+                          Results are persisted to soi_studio_sessions.
 
-GET  /studio            — serves the single-page HTML UI.
+GET  /studio/history    — returns paginated history of past sessions (JSON).
+
+GET  /studio            — serves the single-page HTML UI (includes history browser).
 
 ## Constants
 
@@ -38,23 +41,51 @@ GET  /studio            — serves the single-page HTML UI.
 
 ---
 
+### `class HistorySession(BaseModel)`
+
+---
+
+### `class HistoryResponse(BaseModel)`
+
+---
+
 ## Functions
 
 ```
 @router.post('/generate', response_model=GenerateResponse)
 ```
 ```python
-async def generate_soi_options(body: GenerateRequest) → GenerateResponse
+async def generate_soi_options(body: GenerateRequest, db: AsyncSession = Depends(get_db)) → GenerateResponse
 ```
 
 Calls Claude to produce 3 candidate SoI variants, then scores each
 with the TDK clarity formula and a lightweight jargon check.
+Results are saved to soi_studio_sessions for history browsing.
 
 **Parameters:**
 
 - **`body`** `GenerateRequest`
+- **`db`** `AsyncSession` *(default: `Depends(get_db)`)*
 
 **Returns:** `GenerateResponse`
+
+```
+@router.get('/history', response_model=HistoryResponse)
+```
+```python
+async def get_history(page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100), search: str = Query('', description='Filter by physical name (partial match)'), db: AsyncSession = Depends(get_db)) → HistoryResponse
+```
+
+Return paginated history of past SoI Studio sessions, newest first.
+
+**Parameters:**
+
+- **`page`** `int` *(default: `Query(1, ge=1)`)*
+- **`page_size`** `int` *(default: `Query(20, ge=1, le=100)`)*
+- **`search`** `str` *(default: `Query('', description='Filter by physical name (partial match)')`)*
+- **`db`** `AsyncSession` *(default: `Depends(get_db)`)*
+
+**Returns:** `HistoryResponse`
 
 ```
 @router.get('', response_class=HTMLResponse, include_in_schema=False)

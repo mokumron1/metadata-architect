@@ -42,6 +42,7 @@ from metadata_architect.models.asset_registry import (
     TdkScoreEvent,
     WorkflowStatus,
 )
+from metadata_architect.models.soi_studio import SoiStudioSession  # registers table with Base
 
 # SQLite in-memory URL for integration tests
 _TEST_DB_URL = "sqlite+aiosqlite:///:memory:"

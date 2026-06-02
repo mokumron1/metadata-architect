@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>metadata_architect.api.routers.soi_studio — Metadata Architect AI Agent</title>
+  <title>metadata_architect.models.soi_studio — Metadata Architect AI Agent</title>
   <style>
     :root {
       --bg: #0f1117;
@@ -308,86 +308,18 @@
 </ul></nav>
 <main>
 <div class="mod-header">
-<h1><span class="module-name">metadata_architect.api.routers.soi_studio</span></h1>
+<h1><span class="module-name">metadata_architect.models.soi_studio</span></h1>
 <div class="meta">
-<span><span class="label">Source: </span><span class="val">src/metadata_architect/api/routers/soi_studio.py</span></span>
+<span><span class="label">Source: </span><span class="val">src/metadata_architect/models/soi_studio.py</span></span>
 <span><span class="label">Generated: </span><span class="val">2026-06-02</span></span>
 </div>
 </div>
 <h2>Overview</h2>
-<div class="overview">SoI Studio — interactive Statement of Intent generator.
-
-POST /studio/generate   — accepts a physical name, data type, and a business hint,
-                          then returns 3 candidate Statements of Intent scored with
-                          the TDK clarity formula and a quick jargon check.
-                          Results are persisted to soi_studio_sessions.
-
-GET  /studio/history    — returns paginated history of past sessions (JSON).
-
-GET  /studio            — serves the single-page HTML UI (includes history browser).</div>
-<h2>Constants</h2>
-<table class="const-table"><thead><tr><th>Name</th><th>Value</th></tr></thead><tbody>
-<tr><td><code>_STUDIO_SYSTEM</code></td><td><code>BLOCK_ROLE + &#x27;\n\n## Special Task for This Session\nGenerate EXACTLY 3 distinct Statements of Intent for the same ass...</code></td></tr>
-<tr><td><code>_STUDIO_USER</code></td><td><code>&#x27;Generate 3 Statements of Intent for this asset.\n\nPhysical name : {physical_name}\nData type     : {data_type}\nBus...</code></td></tr>
-<tr><td><code>_JARGON_TERMS</code></td><td><code>{&#x27;DDL&#x27;, &#x27;ETL&#x27;, &#x27;CDC&#x27;, &#x27;ODS&#x27;, &#x27;SCD&#x27;, &#x27;ELT&#x27;, &#x27;DAG&#x27;, &#x27;DWH&#x27;, &#x27;OLAP&#x27;, &#x27;OLTP&#x27;, &#x27;PK&#x27;, &#x27;FK&#x27;, &#x27;UUID&#x27;, &#x27;JSON&#x27;, &#x27;JSONB&#x27;, &#x27;VARCHA...</code></td></tr>
-<tr><td><code>_UI_HTML</code></td><td><code>&#x27;&lt;!DOCTYPE html&gt;\n&lt;html lang=&quot;en&quot;&gt;\n&lt;head&gt;\n&lt;meta charset=&quot;UTF-8&quot;&gt;\n&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width...</code></td></tr>
-</tbody></table>
+<div class="overview">ORM model for SoI Studio generation sessions.</div>
 <h2>Classes</h2>
 <div class="class-card">
-<h3><code>class GenerateRequest(BaseModel)</code></h3>
-<div class="class-bases">Inherits from: <code>BaseModel</code></div>
-</div>
-<div class="class-card">
-<h3><code>class SoIOption(BaseModel)</code></h3>
-<div class="class-bases">Inherits from: <code>BaseModel</code></div>
-</div>
-<div class="class-card">
-<h3><code>class GenerateResponse(BaseModel)</code></h3>
-<div class="class-bases">Inherits from: <code>BaseModel</code></div>
-</div>
-<div class="class-card">
-<h3><code>class HistorySession(BaseModel)</code></h3>
-<div class="class-bases">Inherits from: <code>BaseModel</code></div>
-</div>
-<div class="class-card">
-<h3><code>class HistoryResponse(BaseModel)</code></h3>
-<div class="class-bases">Inherits from: <code>BaseModel</code></div>
-</div>
-<h2>Functions</h2>
-<div class="func-card">
-<div class="decorator">@router.post(&#x27;/generate&#x27;, response_model=GenerateResponse)</div>
-<div class="method">
-<div class="method-sig"><span class="async-badge">async</span><code>def generate_soi_options(body: GenerateRequest, db: AsyncSession = Depends(get_db)) → GenerateResponse</code></div>
-<div class="method-doc">Calls Claude to produce 3 candidate SoI variants, then scores each
-with the TDK clarity formula and a lightweight jargon check.
-Results are saved to soi_studio_sessions for history browsing.</div>
-<table class="params-table"><thead><tr><th>Parameter</th><th>Type</th><th>Default</th></tr></thead><tbody>
-<tr><td><span class="param-name">body</span></td><td><span class="param-type">GenerateRequest</span></td><td><span class="param-default"></span></td></tr>
-<tr><td><span class="param-name">db</span></td><td><span class="param-type">AsyncSession</span></td><td><span class="param-default">Depends(get_db)</span></td></tr>
-</tbody></table>
-<div>Returns: <span class="returns-badge">GenerateResponse</span></div>
-</div>
-</div>
-<div class="func-card">
-<div class="decorator">@router.get(&#x27;/history&#x27;, response_model=HistoryResponse)</div>
-<div class="method">
-<div class="method-sig"><span class="async-badge">async</span><code>def get_history(page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100), search: str = Query(&#x27;&#x27;, description=&#x27;Filter by physical name (partial match)&#x27;), db: AsyncSession = Depends(get_db)) → HistoryResponse</code></div>
-<div class="method-doc">Return paginated history of past SoI Studio sessions, newest first.</div>
-<table class="params-table"><thead><tr><th>Parameter</th><th>Type</th><th>Default</th></tr></thead><tbody>
-<tr><td><span class="param-name">page</span></td><td><span class="param-type">int</span></td><td><span class="param-default">Query(1, ge=1)</span></td></tr>
-<tr><td><span class="param-name">page_size</span></td><td><span class="param-type">int</span></td><td><span class="param-default">Query(20, ge=1, le=100)</span></td></tr>
-<tr><td><span class="param-name">search</span></td><td><span class="param-type">str</span></td><td><span class="param-default">Query(&#x27;&#x27;, description=&#x27;Filter by physical name (partial match)&#x27;)</span></td></tr>
-<tr><td><span class="param-name">db</span></td><td><span class="param-type">AsyncSession</span></td><td><span class="param-default">Depends(get_db)</span></td></tr>
-</tbody></table>
-<div>Returns: <span class="returns-badge">HistoryResponse</span></div>
-</div>
-</div>
-<div class="func-card">
-<div class="decorator">@router.get(&#x27;&#x27;, response_class=HTMLResponse, include_in_schema=False)</div>
-<div class="method">
-<div class="method-sig"><span class="async-badge">async</span><code>def studio_ui() → HTMLResponse</code></div>
-<div>Returns: <span class="returns-badge">HTMLResponse</span></div>
-</div>
+<h3><code>class SoiStudioSession(Base)</code></h3>
+<div class="class-bases">Inherits from: <code>Base</code></div>
 </div>
 <footer>
   Generated by <strong>generate_docs.py</strong> · Metadata Architect AI Agent v0.1.0 · 2026-06-02

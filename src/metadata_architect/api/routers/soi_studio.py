@@ -4,22 +4,30 @@ SoI Studio — interactive Statement of Intent generator.
 POST /studio/generate   — accepts a physical name, data type, and a business hint,
                           then returns 3 candidate Statements of Intent scored with
                           the TDK clarity formula and a quick jargon check.
+                          Results are persisted to soi_studio_sessions.
 
-GET  /studio            — serves the single-page HTML UI.
+GET  /studio/history    — returns paginated history of past sessions (JSON).
+
+GET  /studio            — serves the single-page HTML UI (includes history browser).
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import select, func
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from metadata_architect.agents.claude_client import CachedBlock, ClaudeClient
 from metadata_architect.config import get_settings
+from metadata_architect.database import get_db
+from metadata_architect.models.soi_studio import SoiStudioSession
 from metadata_architect.prompts.soi_drafter import BLOCK_ROLE, build_glossary_block
 from metadata_architect.scoring.tdk_calculator import TdkCalculator, TdkInputs
 
@@ -58,11 +66,30 @@ class SoIOption(BaseModel):
 
 
 class GenerateResponse(BaseModel):
+    session_id: str
     physical_name: str
     data_type: str
     options: list[SoIOption]
     model_used: str
     cache_hit: bool
+
+
+class HistorySession(BaseModel):
+    session_id: str
+    physical_name: str
+    data_type: str
+    business_hint: str | None
+    model_used: str | None
+    cache_hit: bool
+    options: list[dict]
+    created_at: str
+
+
+class HistoryResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    sessions: list[HistorySession]
 
 
 # ---------------------------------------------------------------------------
@@ -116,10 +143,14 @@ Return the JSON array only.
 # ---------------------------------------------------------------------------
 
 @router.post("/generate", response_model=GenerateResponse)
-async def generate_soi_options(body: GenerateRequest) -> GenerateResponse:
+async def generate_soi_options(
+    body: GenerateRequest,
+    db: AsyncSession = Depends(get_db),
+) -> GenerateResponse:
     """
     Calls Claude to produce 3 candidate SoI variants, then scores each
     with the TDK clarity formula and a lightweight jargon check.
+    Results are saved to soi_studio_sessions for history browsing.
     """
     settings = get_settings()
     client = ClaudeClient(model=settings.soi_draft_model, max_tokens=2048)
@@ -195,13 +226,78 @@ async def generate_soi_options(body: GenerateRequest) -> GenerateResponse:
             drafting_notes=v.get("drafting_notes", ""),
         ))
 
+    session_id = uuid.uuid4()
+    record = SoiStudioSession(
+        id=session_id,
+        physical_name=body.physical_name,
+        data_type=body.data_type,
+        business_hint=body.business_hint or None,
+        model_used=response.model,
+        cache_hit=response.cache_hit,
+        options=[o.model_dump() for o in options],
+    )
+    try:
+        db.add(record)
+        await db.commit()
+    except Exception as exc:
+        log.warning("soi_studio.save_session_failed reason=%s", exc)
+        await db.rollback()
+
     return GenerateResponse(
+        session_id=str(session_id),
         physical_name=body.physical_name,
         data_type=body.data_type,
         options=options,
         model_used=response.model,
         cache_hit=response.cache_hit,
     )
+
+
+# ---------------------------------------------------------------------------
+# Endpoint: history
+# ---------------------------------------------------------------------------
+
+@router.get("/history", response_model=HistoryResponse)
+async def get_history(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    search: str = Query("", description="Filter by physical name (partial match)"),
+    db: AsyncSession = Depends(get_db),
+) -> HistoryResponse:
+    """Return paginated history of past SoI Studio sessions, newest first."""
+    base_q = select(SoiStudioSession)
+    count_q = select(func.count()).select_from(SoiStudioSession)
+
+    if search:
+        like = f"%{search}%"
+        base_q = base_q.where(SoiStudioSession.physical_name.ilike(like))
+        count_q = count_q.where(SoiStudioSession.physical_name.ilike(like))
+
+    total_result = await db.execute(count_q)
+    total = total_result.scalar_one()
+
+    rows_result = await db.execute(
+        base_q.order_by(SoiStudioSession.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    rows = rows_result.scalars().all()
+
+    sessions = [
+        HistorySession(
+            session_id=str(r.id),
+            physical_name=r.physical_name,
+            data_type=r.data_type,
+            business_hint=r.business_hint,
+            model_used=r.model_used,
+            cache_hit=r.cache_hit,
+            options=r.options,
+            created_at=r.created_at.isoformat(),
+        )
+        for r in rows
+    ]
+
+    return HistoryResponse(total=total, page=page, page_size=page_size, sessions=sessions)
 
 
 # ---------------------------------------------------------------------------
@@ -251,7 +347,7 @@ def _default_glossary() -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# Inline HTML UI
+# Inline HTML UI  (generator + history browser)
 # ---------------------------------------------------------------------------
 
 _UI_HTML = r"""<!DOCTYPE html>
@@ -679,6 +775,152 @@ input::placeholder, textarea::placeholder { color: var(--muted); opacity: 0.6; }
   background: var(--green);
 }
 
+/* ── Tabs ── */
+.tab-bar {
+  display: flex;
+  gap: 2px;
+  padding: 0 32px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.tab-btn {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 12px 18px;
+  transition: color 0.15s, border-color 0.15s;
+}
+.tab-btn:hover { color: var(--text); }
+.tab-btn.active { color: var(--accent3); border-bottom-color: var(--accent); }
+
+/* ── History panel ── */
+.history-panel {
+  padding: 28px 32px;
+  display: none;
+  flex-direction: column;
+  gap: 16px;
+}
+.history-panel.visible { display: flex; }
+
+.history-toolbar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.history-toolbar input {
+  max-width: 280px;
+}
+.history-count { font-size: 12px; color: var(--muted); margin-left: auto; }
+
+/* History table */
+.hist-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.hist-table th {
+  background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 9px 14px;
+  text-align: left;
+  text-transform: uppercase;
+}
+.hist-table td {
+  border-bottom: 1px solid var(--border);
+  padding: 10px 14px;
+  vertical-align: top;
+}
+.hist-table tr:hover td { background: var(--surface2); cursor: pointer; }
+.hist-table tr.expanded td { background: var(--surface2); }
+
+.hist-name { color: var(--accent2); font-family: monospace; font-size: 12px; }
+.hist-type { background: var(--surface3); border-radius: 4px; color: var(--muted); font-size: 11px; padding: 2px 7px; white-space: nowrap; }
+.hist-date { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.hist-tdk { font-family: monospace; font-size: 12px; }
+
+/* Expanded session detail */
+.hist-detail {
+  display: none;
+}
+.hist-detail.open {
+  display: table-row;
+}
+.hist-detail td {
+  padding: 0 !important;
+  border-bottom: 1px solid var(--border);
+}
+.detail-inner {
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.detail-hint {
+  font-size: 12px;
+  color: var(--muted);
+  font-style: italic;
+  padding: 6px 10px;
+  background: var(--surface3);
+  border-radius: 6px;
+}
+.detail-option {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  padding: 10px 14px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.detail-option-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.detail-label { font-size: 11px; font-weight: 700; color: var(--accent3); text-transform: uppercase; }
+.detail-tdk { font-size: 11px; color: var(--muted); margin-left: auto; }
+
+/* Pagination */
+.pagination {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: center;
+  margin-top: 4px;
+}
+.page-btn {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  padding: 5px 12px;
+  transition: all 0.15s;
+}
+.page-btn:hover { border-color: var(--accent); color: var(--accent); }
+.page-btn.active { background: rgba(124,106,247,0.15); border-color: var(--accent); color: var(--accent3); font-weight: 700; }
+.page-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.page-info { font-size: 12px; color: var(--muted); }
+
+.hist-empty {
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 @media (max-width: 860px) {
   .workspace { grid-template-columns: 1fr; }
   .left-panel { border-right: none; border-bottom: 1px solid var(--border); }
@@ -696,7 +938,12 @@ input::placeholder, textarea::placeholder { color: var(--muted); opacity: 0.6; }
   <div class="header-badge">Metadata Architect · Speed of Trust Framework</div>
 </header>
 
-<div class="workspace">
+<div class="tab-bar">
+  <button class="tab-btn active" onclick="switchTab('generate', this)">Generate</button>
+  <button class="tab-btn" onclick="switchTab('history', this)">History</button>
+</div>
+
+<div class="workspace" id="tabGenerate">
 
   <!-- LEFT: Input panel -->
   <div class="left-panel">
@@ -778,10 +1025,170 @@ input::placeholder, textarea::placeholder { color: var(--muted); opacity: 0.6; }
 
 </div>
 
+<!-- History tab -->
+<div class="history-panel" id="tabHistory">
+  <div class="history-toolbar">
+    <input type="text" id="histSearch" placeholder="Search by physical name…"
+           oninput="debounceSearch()" autocomplete="off" spellcheck="false">
+    <button class="page-btn" onclick="loadHistory(1)">Refresh</button>
+    <span class="history-count" id="histCount"></span>
+  </div>
+  <div id="histTableWrap"></div>
+  <div class="pagination" id="histPagination"></div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
 const API = '/studio/generate';
+const HISTORY_API = '/studio/history';
+
+let _histPage = 1;
+let _histSearch = '';
+let _searchTimer = null;
+
+// ── Tab switching ──
+function switchTab(tab, btn) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('tabGenerate').style.display = tab === 'generate' ? 'grid' : 'none';
+  const hp = document.getElementById('tabHistory');
+  if (tab === 'history') {
+    hp.classList.add('visible');
+    loadHistory(1);
+  } else {
+    hp.classList.remove('visible');
+  }
+}
+
+// ── History ──
+function debounceSearch() {
+  clearTimeout(_searchTimer);
+  _searchTimer = setTimeout(() => {
+    _histSearch = document.getElementById('histSearch').value.trim();
+    loadHistory(1);
+  }, 350);
+}
+
+async function loadHistory(page) {
+  _histPage = page;
+  const params = new URLSearchParams({ page, page_size: 15 });
+  if (_histSearch) params.set('search', _histSearch);
+
+  const wrap = document.getElementById('histTableWrap');
+  wrap.innerHTML = '<div class="hist-empty">Loading…</div>';
+
+  try {
+    const resp = await fetch(`${HISTORY_API}?${params}`);
+    if (!resp.ok) throw new Error(resp.statusText);
+    const data = await resp.json();
+    renderHistory(data);
+  } catch (e) {
+    wrap.innerHTML = `<div class="hist-empty" style="color:var(--red)">Error: ${e.message}</div>`;
+  }
+}
+
+function tdkColor(v) {
+  if (v >= 0.75) return 'var(--green)';
+  if (v >= 0.5)  return 'var(--yellow)';
+  return 'var(--red)';
+}
+
+function renderHistory(data) {
+  document.getElementById('histCount').textContent =
+    `${data.total} session${data.total !== 1 ? 's' : ''}`;
+
+  const wrap = document.getElementById('histTableWrap');
+  if (!data.sessions.length) {
+    wrap.innerHTML = '<div class="hist-empty">No sessions found. Generate some descriptions first!</div>';
+    document.getElementById('histPagination').innerHTML = '';
+    return;
+  }
+
+  const rows = data.sessions.map((s, idx) => {
+    const bestTdk = Math.max(...s.options.map(o => o.tdk_clarity));
+    const dt = new Date(s.created_at);
+    const dateStr = dt.toLocaleDateString() + ' ' + dt.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+    const rowId = `hrow-${idx}`;
+    const detailId = `hdetail-${idx}`;
+
+    const optRows = s.options.map(o => `
+      <div class="detail-option">
+        <div class="detail-option-header">
+          <span class="detail-label">${o.label}</span>
+          <span class="detail-tdk" style="color:${tdkColor(o.tdk_clarity)}">
+            TDK ${(o.tdk_clarity*100).toFixed(0)}/100 · ${o.word_count}w · ${o.reading_level}
+          </span>
+          <button class="btn-sm" style="margin-left:8px"
+            onclick="navigator.clipboard.writeText(${JSON.stringify(o.statement)});showToast('Copied!')">Copy</button>
+        </div>
+        ${o.statement}
+      </div>`).join('');
+
+    const hintHtml = s.business_hint
+      ? `<div class="detail-hint">Hint: ${s.business_hint}</div>` : '';
+
+    return `
+      <tr id="${rowId}" onclick="toggleDetail('${detailId}', '${rowId}')">
+        <td><span class="hist-name">${s.physical_name}</span></td>
+        <td><span class="hist-type">${s.data_type}</span></td>
+        <td class="hist-tdk" style="color:${tdkColor(bestTdk)}">${(bestTdk*100).toFixed(0)}</td>
+        <td class="hist-date">${dateStr}</td>
+      </tr>
+      <tr class="hist-detail" id="${detailId}">
+        <td colspan="4">
+          <div class="detail-inner">
+            ${hintHtml}
+            ${optRows}
+          </div>
+        </td>
+      </tr>`;
+  }).join('');
+
+  wrap.innerHTML = `
+    <table class="hist-table">
+      <thead>
+        <tr>
+          <th>Physical Name</th>
+          <th>Data Type</th>
+          <th>Best TDK</th>
+          <th>Generated</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+
+  // Pagination
+  const totalPages = Math.ceil(data.total / data.page_size);
+  const pg = document.getElementById('histPagination');
+  if (totalPages <= 1) { pg.innerHTML = ''; return; }
+
+  let btns = `<button class="page-btn" onclick="loadHistory(${data.page-1})"
+    ${data.page <= 1 ? 'disabled' : ''}>← Prev</button>`;
+  const start = Math.max(1, data.page - 2);
+  const end = Math.min(totalPages, data.page + 2);
+  for (let p = start; p <= end; p++) {
+    btns += `<button class="page-btn ${p === data.page ? 'active' : ''}"
+      onclick="loadHistory(${p})">${p}</button>`;
+  }
+  btns += `<button class="page-btn" onclick="loadHistory(${data.page+1})"
+    ${data.page >= totalPages ? 'disabled' : ''}>Next →</button>`;
+  btns += `<span class="page-info">Page ${data.page} of ${totalPages}</span>`;
+  pg.innerHTML = btns;
+}
+
+function toggleDetail(detailId, rowId) {
+  const detail = document.getElementById(detailId);
+  const row = document.getElementById(rowId);
+  const isOpen = detail.classList.contains('open');
+  // Close all others
+  document.querySelectorAll('.hist-detail.open').forEach(d => d.classList.remove('open'));
+  document.querySelectorAll('.hist-table tr.expanded').forEach(r => r.classList.remove('expanded'));
+  if (!isOpen) {
+    detail.classList.add('open');
+    row.classList.add('expanded');
+  }
+}
 
 function setType(t) {
   document.getElementById('dataType').value = t;
