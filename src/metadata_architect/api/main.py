@@ -2,7 +2,7 @@ import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from metadata_architect.api.routers import assets, gates, workflows
+from metadata_architect.api.routers import assets, batch, gates, workflows
 from metadata_architect.middleware.request_id import RequestIDMiddleware
 from metadata_architect.observability.logging import configure_logging
 from metadata_architect.observability.tracing import setup_tracing
@@ -33,6 +33,7 @@ app.add_middleware(
 app.include_router(assets.router)
 app.include_router(workflows.router)
 app.include_router(gates.router)
+app.include_router(batch.router)
 
 
 @app.get("/health", tags=["ops"])

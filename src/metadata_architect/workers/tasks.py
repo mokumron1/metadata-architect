@@ -354,21 +354,109 @@ async def _send_orphan_notice(asset_id: uuid.UUID) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Task: analyse_sme_edit (offline, Phase 6 training data pipeline)
+# Task: analyse_sme_edit (offline training data pipeline)
 # ---------------------------------------------------------------------------
 
 @celery_app.task(
     name="metadata_architect.workers.tasks.analyse_sme_edit",
     queue="analysis",
+    max_retries=2,
+    default_retry_delay=120,
 )
 def analyse_sme_edit(asset_id: str, draft_id: str, edit_diff: str) -> dict:
     """
-    Categorise an SME edit diff using Claude.
-    Stores the categorised diff in MinIO as a training data record.
-    Stub — full implementation in Phase 6.
+    Categorise an SME edit diff using Claude and store it in MinIO as a
+    labelled training record.
+
+    Categories (from prompt):
+      FACTUAL_CORRECTION   — SME fixed an incorrect fact
+      CLARITY_IMPROVEMENT  — SME improved readability without changing facts
+      SCOPE_EXPANSION      — SME added context that was missing
+      SCOPE_REDUCTION      — SME removed content that was out of scope
+      TONE_ADJUSTMENT      — SME changed formality or style only
+      JARGON_REPLACEMENT   — SME replaced undefined technical term
+
+    The record is written to MinIO bucket: sme-edits/
+    Key: edits/{asset_id}/{draft_id}/edit_analysis.json
     """
-    log.info("analyse_sme_edit.received", extra={"asset_id": asset_id, "draft_id": draft_id})
-    return {"asset_id": asset_id, "draft_id": draft_id, "status": "analysis_queued"}
+    return asyncio.run(_run_edit_analysis(asset_id, draft_id, edit_diff))
+
+
+async def _run_edit_analysis(asset_id: str, draft_id: str, edit_diff: str) -> dict:
+    from metadata_architect.agents.claude_client import CachedBlock, ClaudeClient
+    from metadata_architect.config import get_settings
+
+    settings = get_settings()
+
+    system_prompt = (
+        "You are a training data analyst for an AI metadata system. "
+        "You receive a diff showing how a Subject Matter Expert (SME) corrected an "
+        "AI-generated Statement of Intent for a data asset. "
+        "Classify the edit using EXACTLY ONE of these categories:\n"
+        "  FACTUAL_CORRECTION, CLARITY_IMPROVEMENT, SCOPE_EXPANSION, "
+        "SCOPE_REDUCTION, TONE_ADJUSTMENT, JARGON_REPLACEMENT\n\n"
+        "Respond with JSON only:\n"
+        '{"category": "...", "confidence": 0.0-1.0, "rationale": "one sentence"}'
+    )
+
+    user_message = f"Diff to classify:\n\n{edit_diff}"
+
+    client = ClaudeClient(model=settings.soi_draft_model, max_tokens=256)
+    response = client.call(
+        [CachedBlock.make(system_prompt, cache=True)],
+        user_message,
+    )
+    analysis = response.parse_json()
+
+    record = {
+        "asset_id": asset_id,
+        "draft_id": draft_id,
+        "edit_diff": edit_diff,
+        "category": analysis.get("category", "UNKNOWN"),
+        "confidence": float(analysis.get("confidence", 0.0)),
+        "rationale": analysis.get("rationale", ""),
+        "model_used": response.model,
+        "analysed_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    # Store in MinIO
+    await _store_edit_record(asset_id, draft_id, record)
+
+    log.info(
+        "analyse_sme_edit.complete asset=%s category=%s confidence=%.2f",
+        asset_id, record["category"], record["confidence"],
+    )
+    return record
+
+
+async def _store_edit_record(asset_id: str, draft_id: str, record: dict) -> None:
+    """Write the edit analysis JSON to MinIO. Silently skips if MinIO is unreachable."""
+    import json
+    import io
+    try:
+        from miniopy_async import Minio  # type: ignore[import-untyped]
+        from metadata_architect.config import get_settings
+
+        settings = get_settings()
+        client = Minio(
+            settings.minio_endpoint,
+            access_key=settings.minio_access_key,
+            secret_key=settings.minio_secret_key,
+            secure=settings.minio_secure,
+        )
+        bucket = settings.minio_bucket_edits
+        if not await client.bucket_exists(bucket):
+            await client.make_bucket(bucket)
+
+        key = f"edits/{asset_id}/{draft_id}/edit_analysis.json"
+        data = json.dumps(record, indent=2).encode()
+        await client.put_object(
+            bucket, key, io.BytesIO(data), length=len(data),
+            content_type="application/json",
+        )
+        log.info("edit_record.stored key=%s", key)
+    except Exception as exc:
+        log.warning("edit_record.store_skipped reason=%s", exc)
 
 
 # ---------------------------------------------------------------------------

@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from metadata_architect.auth.tokens import TokenError, TokenService
+from metadata_architect.catalog.push_adapter import CatalogPayload, CatalogPushDispatcher
 from metadata_architect.config import get_settings
 from metadata_architect.database import get_db
 from metadata_architect.models.asset_registry import (
@@ -50,6 +51,7 @@ _token_svc = TokenService()
 _emitter = PolicyEmitter()
 _calculator = TdkCalculator()
 _dispatcher = NotificationDispatcher()
+_catalog = CatalogPushDispatcher()
 
 _LOAD_FULL = [
     selectinload(SmeWorkflow.asset).selectinload(Asset.soi_drafts),
@@ -151,6 +153,7 @@ async def approve_workflow(
             tdk_score=tdk_score,
         )
     )
+    await _push_to_catalogs(policy, workflow)
 
     return WorkflowActionResponse(
         workflow_id=str(workflow.id),
@@ -208,6 +211,7 @@ async def edit_and_approve_workflow(
             tdk_score=tdk_score,
         )
     )
+    await _push_to_catalogs(policy, workflow)
 
     return WorkflowActionResponse(
         workflow_id=str(workflow.id),
@@ -391,6 +395,24 @@ async def _send_notification(payload: NotificationPayload) -> None:
         await _dispatcher.dispatch(payload)
     except Exception:
         pass  # Notification failure must never break the action endpoint
+
+
+async def _push_to_catalogs(policy, workflow: SmeWorkflow) -> None:
+    """Push approved metadata to DataHub / Collibra. Non-fatal."""
+    try:
+        catalog_payload = CatalogPayload(
+            asset_name=policy.asset_name,
+            asset_uuid=policy.asset_id,
+            statement_of_intent=policy.statement_of_intent,
+            tdk_score=policy.tdk_score,
+            reading_level=policy.reading_level,
+            context_authority=policy.context_authority,
+            certified_at=policy.certified_at,
+            verification_status=policy.verification_status,
+        )
+        await _catalog.dispatch(catalog_payload)
+    except Exception:
+        pass
 
 
 def _workflow_summary(w: SmeWorkflow) -> dict:
