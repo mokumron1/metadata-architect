@@ -3,6 +3,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from metadata_architect.api.routers import assets, gates, workflows
+from metadata_architect.middleware.request_id import RequestIDMiddleware
+from metadata_architect.observability.logging import configure_logging
+from metadata_architect.observability.tracing import setup_tracing
+
+# Initialise logging and tracing before the app handles any requests
+configure_logging()
+setup_tracing()
 
 log = structlog.get_logger()
 
@@ -14,9 +21,10 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
+app.add_middleware(RequestIDMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # tighten in production
+    allow_origins=["*"],  # tighten in production via ALLOWED_ORIGINS env var
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

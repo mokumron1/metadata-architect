@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,11 +26,17 @@ from sqlalchemy.orm import selectinload
 
 from metadata_architect.config import get_settings
 from metadata_architect.database import get_db
+from metadata_architect.middleware.rate_limit import check_gate_rate_limit
 from metadata_architect.models.asset_registry import Asset, WorkflowStatus
+from metadata_architect.observability.tracing import get_tracer
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/gates", tags=["ci-cd-gates"])
+router = APIRouter(
+    prefix="/gates",
+    tags=["ci-cd-gates"],
+    dependencies=[Depends(check_gate_rate_limit)],
+)
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +95,11 @@ async def context_first_gate(
     records) return 200 with `passed=False` so the CI/CD runner can
     distinguish a gate failure from an API error.
     """
+    tracer = get_tracer()
+    with tracer.start_as_current_span("gate.context_first") as span:
+        span.set_attribute("gate.asset_name", body.asset_name)
+        span.set_attribute("gate.source_system", body.source_system or "")
+
     query = (
         select(Asset)
         .where(Asset.asset_name == body.asset_name)
@@ -216,6 +227,11 @@ async def jargon_scrub_gate(
     build.
     """
     from metadata_architect.agents.jargon_scrubber import JargonScrubber
+
+    tracer = get_tracer()
+    with tracer.start_as_current_span("gate.jargon_scrub") as span:
+        span.set_attribute("gate.soi_length", len(body.soi_text))
+        span.set_attribute("gate.fail_on_violation", body.fail_on_violation)
 
     scrubber = JargonScrubber(glossary=body.glossary)
     result = scrubber.scrub(body.soi_text)
