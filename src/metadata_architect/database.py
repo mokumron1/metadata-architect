@@ -13,11 +13,23 @@ class Base(DeclarativeBase):
     pass
 
 
+def _patch_sqlite_types() -> None:
+    """Teach SQLite's DDL compiler to render Postgres-specific types as TEXT."""
+    from sqlalchemy.dialects.sqlite.base import SQLiteTypeCompiler
+
+    def _as_text(self, type_, **kw):
+        return "TEXT"
+
+    SQLiteTypeCompiler.visit_JSONB = _as_text  # type: ignore[attr-defined]
+    SQLiteTypeCompiler.visit_UUID = _as_text   # type: ignore[attr-defined]
+
+
 def _make_engine():
     settings = get_settings()
     url = settings.database_url
-    # SQLite doesn't support connection pool settings
+    # SQLite doesn't support connection pool settings or Postgres-specific types
     if url.startswith("sqlite"):
+        _patch_sqlite_types()
         # Replace relative ./path with absolute path so it works regardless of cwd
         if ":///./" in url:
             rel = url.split(":///./", 1)[1]
