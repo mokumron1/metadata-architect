@@ -167,24 +167,31 @@ async def _run_drafting_pipeline(asset_id: uuid.UUID) -> dict:
         db.add(tdk_log)
 
         # 10. Update sentinel SmeWorkflow with real draft_id + SLA deadline
+        sla_deadline = datetime.now(timezone.utc) + timedelta(hours=settings.sme_sla_hours)
         active_workflow = asset.active_workflow
         if active_workflow:
             active_workflow.draft_id = soi_draft.id
-            active_workflow.sla_deadline_at = datetime.now(timezone.utc) + timedelta(
-                hours=settings.sme_sla_hours
-            )
+            active_workflow.sla_deadline_at = sla_deadline
+            workflow_for_pulse = active_workflow
         else:
-            # Create workflow if none exists yet
-            new_workflow = SmeWorkflow(
+            workflow_for_pulse = SmeWorkflow(
                 asset_id=asset_id,
                 draft_id=soi_draft.id,
                 context_authority=context_authority or "unassigned",
                 status=WorkflowStatus.AWAITING_SME_AUDIT,
-                sla_deadline_at=datetime.now(timezone.utc) + timedelta(
-                    hours=settings.sme_sla_hours
-                ),
+                sla_deadline_at=sla_deadline,
             )
-            db.add(new_workflow)
+            db.add(workflow_for_pulse)
+
+        await db.flush()  # get workflow_for_pulse.id before commit
+
+        # 11. Generate SME review token + send Verification Pulse
+        await _send_verification_pulse(
+            workflow=workflow_for_pulse,
+            asset_name=asset.asset_name,
+            sla_deadline=sla_deadline,
+            tdk_score=tdk_breakdown.composite_score,
+        )
 
         await db.commit()
 
@@ -295,13 +302,55 @@ async def _run_sla_monitor() -> dict:
     default_retry_delay=30,
 )
 def dispatch_orphan_notice(asset_id: str) -> dict:
-    """
-    Sends an Orphan Notice to the Context Authority for the given asset.
-    Notification adapters (email/Slack) are wired in Phase 3.
-    """
-    log.warning("orphan_notice.dispatched", extra={"asset_id": asset_id})
-    # Phase 3: replace with NotificationAdapter call
-    return {"asset_id": asset_id, "status": "notice_queued"}
+    """Sends an Orphan Notice to the Context Authority for the given asset."""
+    return asyncio.run(_send_orphan_notice(uuid.UUID(asset_id)))
+
+
+async def _send_orphan_notice(asset_id: uuid.UUID) -> dict:
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+    from metadata_architect.config import get_settings
+    from metadata_architect.models.asset_registry import Asset, SmeWorkflow, WorkflowStatus
+    from metadata_architect.notifications.base import NotificationPayload, NotificationType
+    from metadata_architect.notifications.dispatcher import NotificationDispatcher
+
+    settings = get_settings()
+    engine = create_async_engine(settings.database_url)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with session_factory() as db:
+        result = await db.execute(
+            select(SmeWorkflow)
+            .where(
+                SmeWorkflow.asset_id == asset_id,
+                SmeWorkflow.status == WorkflowStatus.ORPHANED,
+            )
+            .options(selectinload(SmeWorkflow.asset).selectinload(Asset.tdk_scores))
+            .order_by(SmeWorkflow.created_at.desc())
+            .limit(1)
+        )
+        workflow = result.scalar_one_or_none()
+
+    await engine.dispose()
+
+    if not workflow:
+        log.warning("orphan_notice.no_workflow_found", extra={"asset_id": str(asset_id)})
+        return {"asset_id": str(asset_id), "status": "no_workflow"}
+
+    tdk = workflow.asset.tdk_scores[-1].composite_score if workflow.asset.tdk_scores else None
+    payload = NotificationPayload(
+        notification_type=NotificationType.ORPHAN_NOTICE,
+        recipient_email=workflow.context_authority,
+        asset_id=str(asset_id),
+        asset_name=workflow.asset.asset_name,
+        workflow_id=str(workflow.id),
+        tdk_score=tdk,
+    )
+    dispatcher = NotificationDispatcher()
+    results = await dispatcher.dispatch(payload)
+    log.warning("orphan_notice.dispatched", extra={"asset_id": str(asset_id), "results": results})
+    return {"asset_id": str(asset_id), "status": "dispatched", "channels": results}
 
 
 # ---------------------------------------------------------------------------
@@ -325,6 +374,46 @@ def analyse_sme_edit(asset_id: str, draft_id: str, edit_diff: str) -> dict:
 # ---------------------------------------------------------------------------
 # Shared helpers (local imports to avoid circular deps at module level)
 # ---------------------------------------------------------------------------
+
+async def _send_verification_pulse(
+    workflow,
+    asset_name: str,
+    sla_deadline: datetime,
+    tdk_score: float,
+) -> None:
+    """Generate a review token and dispatch the Verification Pulse notification."""
+    from metadata_architect.auth.tokens import TokenService
+    from metadata_architect.notifications.base import NotificationPayload, NotificationType
+    from metadata_architect.notifications.dispatcher import NotificationDispatcher
+
+    try:
+        token_svc = TokenService()
+        review_token = token_svc.create_review_token(
+            workflow_id=workflow.id,
+            sme_email=workflow.context_authority,
+            sla_deadline=sla_deadline,
+        )
+        # Base URL from settings — configure PORTAL_BASE_URL in .env for production
+        from metadata_architect.config import get_settings
+        base_url = getattr(get_settings(), "portal_base_url", "http://localhost:8000")
+        review_link = f"{base_url}/portal/review/{workflow.id}?token={review_token}"
+
+        payload = NotificationPayload(
+            notification_type=NotificationType.VERIFICATION_PULSE,
+            recipient_email=workflow.context_authority,
+            asset_id=str(workflow.asset_id),
+            asset_name=asset_name,
+            workflow_id=str(workflow.id),
+            review_link=review_link,
+            sla_deadline_iso=sla_deadline.isoformat(),
+            tdk_score=tdk_score,
+        )
+        dispatcher = NotificationDispatcher()
+        await dispatcher.dispatch(payload)
+        workflow.notification_sent_at = datetime.now(timezone.utc)
+    except Exception as exc:
+        log.warning("verification_pulse.failed", extra={"error": str(exc)})
+
 
 def _dialect_from_source(source_system: str | None) -> str:
     mapping = {

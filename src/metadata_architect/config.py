@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 480
 
+    # Portal
+    portal_base_url: str = "http://localhost:8000"
+
 
 @lru_cache
 def get_settings() -> Settings:
