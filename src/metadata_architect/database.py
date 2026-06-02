@@ -11,8 +11,12 @@ class Base(DeclarativeBase):
 
 def _make_engine():
     settings = get_settings()
+    url = settings.database_url
+    # SQLite doesn't support connection pool settings
+    if url.startswith("sqlite"):
+        return create_async_engine(url, echo=False, connect_args={"check_same_thread": False})
     return create_async_engine(
-        settings.database_url,
+        url,
         pool_size=settings.database_pool_size,
         max_overflow=settings.database_max_overflow,
         echo=False,

@@ -5,8 +5,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    # Database
-    database_url: str = "postgresql+asyncpg://metadata:metadata@localhost:5432/metadata_architect"
+    # Database — defaults to a local SQLite file so the app runs with no infrastructure
+    database_url: str = "sqlite+aiosqlite:///./metadata_architect.db"
     database_pool_size: int = 10
     database_max_overflow: int = 20
 
