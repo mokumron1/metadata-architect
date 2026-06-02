@@ -1450,7 +1450,9 @@ async function generate() {
     resultsArea.innerHTML = `
       <div class="right-panel-header">
         <h2>Generated Descriptions for <code style="color:var(--accent2);font-size:13px">${physical}</code></h2>
-        <span class="result-meta">${cacheLabel} · ${data.model_used}</span>
+        <button class="btn-save-history" id="saveHistoryBtn" onclick="saveToHistory()">
+          💾 Save to History
+        </button>
       </div>
       <div class="model-info">
         <span>${data.cache_hit ? '<div class="cache-dot"></div>' : ''}
@@ -1459,11 +1461,6 @@ async function generate() {
         <span style="margin-left:auto;color:var(--muted)">Click any description to edit · Use this ↗ to select</span>
       </div>
       ${data.options.map((opt, i) => renderCard(opt, i + 1)).join('')}
-      <div style="display:flex;justify-content:flex-end;padding-top:4px">
-        <button class="btn-save-history" id="saveHistoryBtn" onclick="saveToHistory()">
-          💾 Save to History
-        </button>
-      </div>
     `;
   } catch (e) {
     errBanner.style.display = 'block';
