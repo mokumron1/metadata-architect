@@ -74,6 +74,19 @@ class GenerateResponse(BaseModel):
     cache_hit: bool
 
 
+class SaveRequest(BaseModel):
+    physical_name: str
+    data_type: str
+    business_hint: str | None = None
+    model_used: str | None = None
+    cache_hit: bool = False
+    options: list[dict]
+
+
+class SaveResponse(BaseModel):
+    session_id: str
+
+
 class HistorySession(BaseModel):
     session_id: str
     physical_name: str
@@ -143,14 +156,11 @@ Return the JSON array only.
 # ---------------------------------------------------------------------------
 
 @router.post("/generate", response_model=GenerateResponse)
-async def generate_soi_options(
-    body: GenerateRequest,
-    db: AsyncSession = Depends(get_db),
-) -> GenerateResponse:
+async def generate_soi_options(body: GenerateRequest) -> GenerateResponse:
     """
     Calls Claude to produce 3 candidate SoI variants, then scores each
     with the TDK clarity formula and a lightweight jargon check.
-    Results are saved to soi_studio_sessions for history browsing.
+    Results are NOT saved automatically — call POST /studio/save to persist.
     """
     settings = get_settings()
     client = ClaudeClient(model=settings.soi_draft_model, max_tokens=2048)
@@ -226,15 +236,35 @@ async def generate_soi_options(
             drafting_notes=v.get("drafting_notes", ""),
         ))
 
+    return GenerateResponse(
+        session_id="",  # not yet saved — call POST /studio/save to persist
+        physical_name=body.physical_name,
+        data_type=body.data_type,
+        options=options,
+        model_used=response.model,
+        cache_hit=response.cache_hit,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Endpoint: save session
+# ---------------------------------------------------------------------------
+
+@router.post("/save", response_model=SaveResponse, status_code=201)
+async def save_session(
+    body: SaveRequest,
+    db: AsyncSession = Depends(get_db),
+) -> SaveResponse:
+    """Persist a generated session to history. Called explicitly by the SME."""
     session_id = uuid.uuid4()
     record = SoiStudioSession(
         id=session_id,
         physical_name=body.physical_name,
         data_type=body.data_type,
         business_hint=body.business_hint or None,
-        model_used=response.model,
-        cache_hit=response.cache_hit,
-        options=[o.model_dump() for o in options],
+        model_used=body.model_used,
+        cache_hit=body.cache_hit,
+        options=body.options,
     )
     try:
         db.add(record)
@@ -242,15 +272,11 @@ async def generate_soi_options(
     except Exception as exc:
         log.warning("soi_studio.save_session_failed reason=%s", exc)
         await db.rollback()
-
-    return GenerateResponse(
-        session_id=str(session_id),
-        physical_name=body.physical_name,
-        data_type=body.data_type,
-        options=options,
-        model_used=response.model,
-        cache_hit=response.cache_hit,
-    )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to save session to history.",
+        )
+    return SaveResponse(session_id=str(session_id))
 
 
 # ---------------------------------------------------------------------------
@@ -921,6 +947,23 @@ input::placeholder, textarea::placeholder { color: var(--muted); opacity: 0.6; }
   font-size: 13px;
 }
 
+/* Save to History button */
+.btn-save-history {
+  background: linear-gradient(135deg, #1a3a2a 0%, #1e4a35 100%);
+  border: 1px solid var(--green);
+  border-radius: 8px;
+  color: var(--green);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 9px 20px;
+  transition: all 0.2s;
+}
+.btn-save-history:hover { background: rgba(52,211,153,0.15); box-shadow: 0 0 12px rgba(52,211,153,0.2); }
+.btn-save-history:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-save-history.saved { border-color: var(--muted); color: var(--muted); background: var(--surface2); }
+
 @media (max-width: 860px) {
   .workspace { grid-template-columns: 1fr; }
   .left-panel { border-right: none; border-bottom: 1px solid var(--border); }
@@ -1041,11 +1084,44 @@ input::placeholder, textarea::placeholder { color: var(--muted); opacity: 0.6; }
 
 <script>
 const API = '/studio/generate';
+const SAVE_API = '/studio/save';
 const HISTORY_API = '/studio/history';
+
+let _lastGenerated = null;  // holds the last GenerateResponse for manual save
 
 let _histPage = 1;
 let _histSearch = '';
 let _searchTimer = null;
+
+// ── Save to History ──
+async function saveToHistory() {
+  if (!_lastGenerated) return;
+  const btn = document.getElementById('saveHistoryBtn');
+  btn.disabled = true;
+  btn.textContent = 'Saving…';
+  try {
+    const resp = await fetch(SAVE_API, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        physical_name: _lastGenerated.physical_name,
+        data_type: _lastGenerated.data_type,
+        business_hint: document.getElementById('businessHint').value.trim() || null,
+        model_used: _lastGenerated.model_used,
+        cache_hit: _lastGenerated.cache_hit,
+        options: _lastGenerated.options,
+      }),
+    });
+    if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).detail || resp.statusText);
+    btn.textContent = '✓ Saved to History';
+    btn.classList.add('saved');
+    showToast('Session saved to History');
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = '💾 Save to History';
+    showToast(`Save failed: ${e.message}`);
+  }
+}
 
 // ── Tab switching ──
 function switchTab(tab, btn) {
@@ -1330,6 +1406,7 @@ async function generate() {
   const emptyState = document.getElementById('emptyState');
   const resultsArea = document.getElementById('resultsArea');
 
+  _lastGenerated = null;
   btn.disabled = true;
   spinner.style.display = 'block';
   btnText.textContent = 'Generating…';
@@ -1367,6 +1444,7 @@ async function generate() {
     }
 
     const data = await resp.json();
+    _lastGenerated = data;  // store for manual save
     const cacheLabel = data.cache_hit ? '⚡ Cache hit' : '🔮 Fresh generation';
 
     resultsArea.innerHTML = `
@@ -1381,6 +1459,11 @@ async function generate() {
         <span style="margin-left:auto;color:var(--muted)">Click any description to edit · Use this ↗ to select</span>
       </div>
       ${data.options.map((opt, i) => renderCard(opt, i + 1)).join('')}
+      <div style="display:flex;justify-content:flex-end;padding-top:4px">
+        <button class="btn-save-history" id="saveHistoryBtn" onclick="saveToHistory()">
+          💾 Save to History
+        </button>
+      </div>
     `;
   } catch (e) {
     errBanner.style.display = 'block';

@@ -57,6 +57,20 @@ async def _generate(client, physical_name: str, data_type: str = "NUMERIC") -> d
     return resp.json()
 
 
+async def _generate_and_save(client, physical_name: str, data_type: str = "NUMERIC") -> dict:
+    """Generate then explicitly save — mirrors the manual UI flow."""
+    data = await _generate(client, physical_name, data_type)
+    save_resp = await client.post("/studio/save", json={
+        "physical_name": data["physical_name"],
+        "data_type": data["data_type"],
+        "model_used": data["model_used"],
+        "cache_hit": data["cache_hit"],
+        "options": data["options"],
+    })
+    assert save_resp.status_code == 201
+    return save_resp.json()
+
+
 # ---------------------------------------------------------------------------
 # DB persistence
 # ---------------------------------------------------------------------------
@@ -67,9 +81,9 @@ class TestSessionPersistence:
         self.client = async_client
         self.db = db_session
 
-    async def test_generate_creates_db_record(self):
-        data = await _generate(self.client, "rev_ytd_usd")
-        session_id = data["session_id"]
+    async def test_save_creates_db_record(self):
+        saved = await _generate_and_save(self.client, "rev_ytd_usd")
+        session_id = saved["session_id"]
         result = await self.db.execute(
             select(SoiStudioSession).where(SoiStudioSession.physical_name == "rev_ytd_usd")
         )
@@ -77,16 +91,23 @@ class TestSessionPersistence:
         assert row is not None
         assert str(row.id) == session_id
 
+    async def test_generate_does_not_create_db_record(self):
+        await _generate(self.client, "unsaved_col_xyz")
+        result = await self.db.execute(
+            select(SoiStudioSession).where(SoiStudioSession.physical_name == "unsaved_col_xyz")
+        )
+        row = result.scalar_one_or_none()
+        assert row is None
+
     async def test_session_stores_physical_name(self):
-        await _generate(self.client, "cust_churn_flag")
+        await _generate_and_save(self.client, "cust_churn_flag")
         result = await self.db.execute(
             select(SoiStudioSession).where(SoiStudioSession.physical_name == "cust_churn_flag")
         )
-        row = result.scalar_one_or_none()
-        assert row is not None
+        assert result.scalar_one_or_none() is not None
 
     async def test_session_stores_options_json(self):
-        await _generate(self.client, "order_region_cd")
+        await _generate_and_save(self.client, "order_region_cd")
         result = await self.db.execute(
             select(SoiStudioSession).where(SoiStudioSession.physical_name == "order_region_cd")
         )
@@ -95,19 +116,17 @@ class TestSessionPersistence:
         assert len(row.options) == 3
 
     async def test_session_stores_model_used(self):
-        await _generate(self.client, "trx_amt_usd")
+        await _generate_and_save(self.client, "trx_amt_usd")
         result = await self.db.execute(
             select(SoiStudioSession).where(SoiStudioSession.physical_name == "trx_amt_usd")
         )
         row = result.scalar_one_or_none()
         assert row.model_used == "claude-sonnet-4-6"
 
-    async def test_response_includes_session_id(self):
-        data = await _generate(self.client, "prod_margin_pct")
-        assert "session_id" in data
-        # Must be a valid UUID
+    async def test_save_returns_session_id(self):
+        saved = await _generate_and_save(self.client, "prod_margin_pct")
         import uuid
-        uuid.UUID(data["session_id"])
+        uuid.UUID(saved["session_id"])
 
 
 # ---------------------------------------------------------------------------
@@ -131,7 +150,7 @@ class TestHistoryEndpoint:
 
     async def test_history_reflects_generated_sessions(self):
         for name in ("hist_col_a", "hist_col_b", "hist_col_c"):
-            await _generate(self.client, name)
+            await _generate_and_save(self.client, name)
         resp = await self.client.get("/studio/history")
         data = resp.json()
         names = [s["physical_name"] for s in data["sessions"]]
@@ -140,7 +159,7 @@ class TestHistoryEndpoint:
 
     async def test_history_newest_first(self):
         for name in ("order_first", "order_second", "order_third"):
-            await _generate(self.client, name)
+            await _generate_and_save(self.client, name)
         resp = await self.client.get("/studio/history")
         names = [s["physical_name"] for s in resp.json()["sessions"]]
         # Most recent should be order_third
@@ -150,7 +169,7 @@ class TestHistoryEndpoint:
             assert idx_third < idx_first
 
     async def test_history_search_filters(self):
-        await _generate(self.client, "searchable_col_xyz")
+        await _generate_and_save(self.client, "searchable_col_xyz")
         resp = await self.client.get("/studio/history?search=searchable_col_xyz")
         data = resp.json()
         assert any(s["physical_name"] == "searchable_col_xyz" for s in data["sessions"])
@@ -168,14 +187,14 @@ class TestHistoryEndpoint:
         assert len(data["sessions"]) <= 2
 
     async def test_history_session_has_options(self):
-        await _generate(self.client, "paged_col_test")
+        await _generate_and_save(self.client, "paged_col_test")
         resp = await self.client.get("/studio/history?search=paged_col_test")
         sessions = resp.json()["sessions"]
         assert len(sessions) >= 1
         assert len(sessions[0]["options"]) == 3
 
     async def test_history_session_has_created_at(self):
-        await _generate(self.client, "ts_col_test")
+        await _generate_and_save(self.client, "ts_col_test")
         resp = await self.client.get("/studio/history?search=ts_col_test")
         session = resp.json()["sessions"][0]
         from datetime import datetime
