@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>metadata_architect.agents.soi_drafter — Metadata Architect AI Agent</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d2e;
+      --surface2: #252840;
+      --accent: #7c6af7;
+      --accent2: #56c2e6;
+      --text: #e2e4f0;
+      --muted: #8b90b0;
+      --code-bg: #12141f;
+      --border: #2e3157;
+      --green: #4ade80;
+      --yellow: #facc15;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 15px;
+      line-height: 1.7;
+    }
+    a { color: var(--accent2); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* Layout */
+    .page { display: flex; min-height: 100vh; }
+    nav {
+      width: 260px;
+      min-width: 260px;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      padding: 24px 0;
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow-y: auto;
+    }
+    nav .logo {
+      padding: 0 20px 20px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 16px;
+    }
+    nav .logo h2 { font-size: 14px; color: var(--accent); font-weight: 700; }
+    nav .logo p { font-size: 11px; color: var(--muted); margin-top: 2px; }
+    nav ul { list-style: none; padding: 0 8px; }
+    nav ul li a {
+      display: block;
+      padding: 5px 12px;
+      border-radius: 6px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    nav ul li a:hover, nav ul li a.active {
+      background: var(--surface2);
+      color: var(--text);
+      text-decoration: none;
+    }
+    nav .nav-group { padding: 12px 12px 4px; font-size: 11px; font-weight: 700;
+                      color: var(--accent); text-transform: uppercase; letter-spacing: 0.08em; }
+
+    main {
+      flex: 1;
+      padding: 48px 56px;
+      max-width: 960px;
+    }
+
+    /* Header */
+    .mod-header { margin-bottom: 40px; }
+    .mod-header h1 { font-size: 26px; font-weight: 700; color: var(--text); margin-bottom: 8px; }
+    .mod-header .module-name {
+      font-family: "SF Mono", "Fira Code", monospace;
+      font-size: 13px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 2px 8px;
+      color: var(--accent2);
+    }
+    .meta { font-size: 13px; color: var(--muted); margin-top: 10px; }
+    .meta span { margin-right: 20px; }
+    .meta .label { color: var(--muted); }
+    .meta .val { color: var(--text); font-family: monospace; }
+    .description-box {
+      background: var(--surface);
+      border-left: 3px solid var(--accent);
+      border-radius: 0 8px 8px 0;
+      padding: 14px 20px;
+      margin: 20px 0;
+      font-size: 14px;
+      color: var(--text);
+    }
+
+    /* Sections */
+    h2 {
+      font-size: 19px;
+      font-weight: 600;
+      color: var(--text);
+      margin: 40px 0 16px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+    h3 {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--accent2);
+      margin: 28px 0 10px;
+    }
+    h4 { font-size: 14px; font-weight: 600; color: var(--muted); margin: 20px 0 8px; text-transform: uppercase; letter-spacing: 0.06em; }
+
+    /* Code */
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px 20px;
+      overflow-x: auto;
+      font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+      font-size: 13px;
+      line-height: 1.6;
+      color: var(--accent2);
+      margin: 8px 0 16px;
+    }
+    code {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 1px 6px;
+      font-family: "SF Mono", "Fira Code", monospace;
+      font-size: 12px;
+      color: var(--accent2);
+    }
+    pre code { background: none; border: none; padding: 0; font-size: inherit; }
+
+    /* Overview */
+    .overview {
+      background: var(--surface);
+      border-radius: 8px;
+      padding: 20px 24px;
+      margin-bottom: 16px;
+      white-space: pre-wrap;
+      font-size: 14px;
+      color: var(--muted);
+      border: 1px solid var(--border);
+    }
+
+    /* Class card */
+    .class-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 24px 28px;
+      margin-bottom: 24px;
+    }
+    .class-card h3 { margin-top: 0; }
+    .class-bases {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+    .class-doc {
+      font-size: 14px;
+      color: var(--muted);
+      margin-bottom: 20px;
+      white-space: pre-wrap;
+    }
+
+    /* Method */
+    .method {
+      border-top: 1px solid var(--border);
+      padding-top: 16px;
+      margin-top: 16px;
+    }
+    .method-sig {
+      font-family: "SF Mono", "Fira Code", monospace;
+      font-size: 13px;
+      color: var(--accent2);
+    }
+    .async-badge {
+      display: inline-block;
+      background: #1e3a5f;
+      color: #60b4f0;
+      font-size: 10px;
+      font-weight: 700;
+      border-radius: 4px;
+      padding: 1px 6px;
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+    .method-doc { font-size: 13px; color: var(--muted); margin: 8px 0; white-space: pre-wrap; }
+
+    /* Params table */
+    .params-table { width: 100%; border-collapse: collapse; margin: 10px 0 16px; font-size: 13px; }
+    .params-table th {
+      text-align: left;
+      padding: 6px 12px;
+      background: var(--surface2);
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .params-table td { padding: 7px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+    .params-table tr:last-child td { border-bottom: none; }
+    .param-name { color: var(--accent2); font-family: monospace; }
+    .param-type { color: var(--green); font-family: monospace; font-size: 12px; }
+    .param-default { color: var(--yellow); font-family: monospace; font-size: 12px; }
+    .returns-badge {
+      display: inline-block;
+      background: #1a3a2a;
+      color: var(--green);
+      border-radius: 4px;
+      padding: 2px 8px;
+      font-family: monospace;
+      font-size: 12px;
+      margin-top: 4px;
+    }
+
+    /* Constants table */
+    .const-table { width: 100%; border-collapse: collapse; margin: 0 0 24px; font-size: 13px; }
+    .const-table th {
+      text-align: left; padding: 8px 14px;
+      background: var(--surface2); color: var(--muted);
+      font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+    }
+    .const-table td { padding: 8px 14px; border-bottom: 1px solid var(--border); }
+    .const-table tr:last-child td { border-bottom: none; }
+
+    /* Function card */
+    .func-card {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 18px 22px;
+      margin-bottom: 16px;
+    }
+    .func-card h3 { margin-top: 0; font-size: 15px; }
+
+    /* Decorator */
+    .decorator { color: #c084fc; font-size: 12px; font-family: monospace; }
+
+    /* Footer */
+    footer {
+      margin-top: 60px;
+      padding-top: 20px;
+      border-top: 1px solid var(--border);
+      font-size: 12px;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+<div class="page">
+<nav>
+<div class="logo">
+<h2>Metadata Architect AI Agent</h2>
+<p>API Reference v0.1.0</p>
+</div>
+<ul>
+<li><div class="nav-group">Core</div></li>
+<li><a href="config.html" class="">config</a></li>
+<li><a href="database.html" class="">database</a></li>
+<li><div class="nav-group">API</div></li>
+<li><a href="api.main.html" class="">main</a></li>
+<li><a href="api.routers.assets.html" class="">assets</a></li>
+<li><a href="api.routers.batch.html" class="">batch</a></li>
+<li><a href="api.routers.gates.html" class="">gates</a></li>
+<li><a href="api.routers.workflows.html" class="">workflows</a></li>
+<li><div class="nav-group">Agents</div></li>
+<li><a href="agents.claude_client.html" class="">claude client</a></li>
+<li><a href="agents.soi_drafter.html" class="active">soi drafter</a></li>
+<li><a href="agents.jargon_scrubber.html" class="">jargon scrubber</a></li>
+<li><a href="agents.reading_level.html" class="">reading level</a></li>
+<li><div class="nav-group">Intelligence</div></li>
+<li><a href="scoring.tdk_calculator.html" class="">tdk calculator</a></li>
+<li><a href="parsers.schema_parser.html" class="">schema parser</a></li>
+<li><a href="policy.emitter.html" class="">emitter</a></li>
+<li><div class="nav-group">Prompts</div></li>
+<li><a href="prompts.soi_drafter.html" class="">soi drafter</a></li>
+<li><a href="prompts.jargon_scrubber.html" class="">jargon scrubber</a></li>
+<li><a href="prompts.reading_level.html" class="">reading level</a></li>
+<li><div class="nav-group">Workflow</div></li>
+<li><a href="auth.tokens.html" class="">tokens</a></li>
+<li><a href="models.asset_registry.html" class="">asset registry</a></li>
+<li><a href="schemas.asset_schemas.html" class="">asset schemas</a></li>
+<li><div class="nav-group">Notifications</div></li>
+<li><a href="notifications.base.html" class="">base</a></li>
+<li><a href="notifications.dispatcher.html" class="">dispatcher</a></li>
+<li><a href="notifications.sendgrid_adapter.html" class="">sendgrid adapter</a></li>
+<li><a href="notifications.slack_adapter.html" class="">slack adapter</a></li>
+<li><div class="nav-group">Workers</div></li>
+<li><a href="workers.celery_app.html" class="">celery app</a></li>
+<li><a href="workers.tasks.html" class="">tasks</a></li>
+<li><div class="nav-group">Catalog</div></li>
+<li><a href="catalog.push_adapter.html" class="">push adapter</a></li>
+<li><div class="nav-group">Observability</div></li>
+<li><a href="observability.tracing.html" class="">tracing</a></li>
+<li><a href="observability.logging.html" class="">logging</a></li>
+<li><div class="nav-group">Middleware</div></li>
+<li><a href="middleware.request_id.html" class="">request id</a></li>
+<li><a href="middleware.rate_limit.html" class="">rate limit</a></li>
+</ul></nav>
+<main>
+<div class="mod-header">
+<h1><span class="module-name">metadata_architect.agents.soi_drafter</span></h1>
+<div class="meta">
+<span><span class="label">Source: </span><span class="val">src/metadata_architect/agents/soi_drafter.py</span></span>
+<span><span class="label">Generated: </span><span class="val">2026-06-02</span></span>
+</div>
+<div class="description-box">Primary AI agent that drafts Statements of Intent from DDL schemas.</div>
+</div>
+<h2>Overview</h2>
+<div class="overview">Statement of Intent Drafter.
+
+Takes a ParsedSchema + optional lineage and glossary context,
+calls Claude with cached system prompt blocks, and returns a
+structured SoIDraftResult ready to be persisted as a SoIDraft record.</div>
+<h2>Constants</h2>
+<table class="const-table"><thead><tr><th>Name</th><th>Value</th></tr></thead><tbody>
+<tr><td><code>_MIN_CACHE_TOKENS</code></td><td><code>200</code></td></tr>
+</tbody></table>
+<h2>Classes</h2>
+<div class="class-card">
+<h3><code>class SoIDraftResult</code></h3>
+<h4>Methods</h4>
+<div class="decorator">@property</div>
+<div class="method">
+<div class="method-sig"><code>def tdk_initial_score() → float</code></div>
+<div class="method-doc">Provisional TDK score from the draft alone (before SME review).
+The full score is computed by TdkScoreCalculator after SME action.</div>
+<div>Returns: <span class="returns-badge">float</span></div>
+</div>
+</div>
+<div class="class-card">
+<h3><code>class SoIDrafter</code></h3>
+<div class="class-doc">Drafts a Statement of Intent for a data asset.
+
+The enterprise glossary and ISO-24495-1 rules are injected as cached
+system prompt blocks, amortising their token cost across all drafting calls.</div>
+<h4>Methods</h4>
+<div class="method">
+<div class="method-sig"><code>def __init__(glossary: dict[str, str] | None = None) → None</code></div>
+<table class="params-table"><thead><tr><th>Parameter</th><th>Type</th><th>Default</th></tr></thead><tbody>
+<tr><td><span class="param-name">glossary</span></td><td><span class="param-type">dict[str, str] | None</span></td><td><span class="param-default">None</span></td></tr>
+</tbody></table>
+<div>Returns: <span class="returns-badge">None</span></div>
+</div>
+<div class="method">
+<div class="method-sig"><code>def draft(schema: ParsedSchema, lineage_context: list[str] | None = None, asset_type: str = &#x27;table&#x27;) → SoIDraftResult</code></div>
+<div class="method-doc">Generate a SoI draft for the given schema.
+
+If Claude&#x27;s confidence is below the escalation threshold,
+the draft is automatically retried with the Opus escalation model.</div>
+<table class="params-table"><thead><tr><th>Parameter</th><th>Type</th><th>Default</th></tr></thead><tbody>
+<tr><td><span class="param-name">schema</span></td><td><span class="param-type">ParsedSchema</span></td><td><span class="param-default"></span></td></tr>
+<tr><td><span class="param-name">lineage_context</span></td><td><span class="param-type">list[str] | None</span></td><td><span class="param-default">None</span></td></tr>
+<tr><td><span class="param-name">asset_type</span></td><td><span class="param-type">str</span></td><td><span class="param-default">&#x27;table&#x27;</span></td></tr>
+</tbody></table>
+<div>Returns: <span class="returns-badge">SoIDraftResult</span></div>
+</div>
+<div class="method">
+<div class="method-sig"><code>def _build_system_blocks(escalating: bool = False) → list[dict]</code></div>
+<table class="params-table"><thead><tr><th>Parameter</th><th>Type</th><th>Default</th></tr></thead><tbody>
+<tr><td><span class="param-name">escalating</span></td><td><span class="param-type">bool</span></td><td><span class="param-default">False</span></td></tr>
+</tbody></table>
+<div>Returns: <span class="returns-badge">list[dict]</span></div>
+</div>
+</div>
+<footer>
+  Generated by <strong>generate_docs.py</strong> · Metadata Architect AI Agent v0.1.0 · 2026-06-02
+</footer>
+</main>
+</div>
+</body>
+</html>
