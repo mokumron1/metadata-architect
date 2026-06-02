@@ -1,0 +1,46 @@
+# Golden fixture for SoI Drafter prompt regression testing.
+# Tests assert structural and constraint compliance — NOT exact text content.
+
+name: global_revenue_agg_v1
+description: Daily revenue aggregate table — finance / audit domain
+
+input:
+  asset_name: finance.global_revenue_agg_v1
+  asset_type: table
+  dialect: postgres
+  columns:
+    - {name: id, type: BIGINT, primary_key: true, nullable: false}
+    - {name: report_date, type: DATE, nullable: false}
+    - {name: region_code, type: VARCHAR(8), nullable: false}
+    - {name: currency, type: CHAR(3), nullable: false}
+    - {name: revenue, type: NUMERIC(18,4), nullable: false, default: "0"}
+    - {name: cost, type: NUMERIC(18,4), nullable: true}
+    - {name: created_at, type: TIMESTAMPTZ, nullable: false}
+    - {name: updated_at, type: TIMESTAMPTZ, nullable: false}
+  primary_keys: [id]
+  lineage: []
+
+expected_schema:
+  required_fields:
+    - statement_of_intent
+    - reading_level
+    - reading_level_score
+    - confidence
+    - glossary_terms_used
+    - drafting_notes
+
+constraints:
+  soi_min_words: 20
+  soi_max_words: 100
+  reading_level_score_min: 0.0
+  reading_level_score_max: 12.0
+  confidence_min: 0.0
+  confidence_max: 1.0
+  glossary_terms_used_type: list
+  # SoI must reference the core business concept
+  soi_must_contain_one_of:
+    - revenue
+    - finance
+    - audit
+    - currency
+    - region
