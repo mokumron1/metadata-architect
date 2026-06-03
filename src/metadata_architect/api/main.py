@@ -7,6 +7,7 @@ load_dotenv()
 from fastapi.middleware.cors import CORSMiddleware
 
 from metadata_architect.api.routers import assets, batch, gates, soi_studio, workflows
+from metadata_architect.config import get_settings
 from metadata_architect.database import Base, engine
 from metadata_architect.middleware.request_id import RequestIDMiddleware
 from metadata_architect.observability.logging import configure_logging
@@ -21,9 +22,32 @@ setup_tracing()
 
 log = structlog.get_logger()
 
+_settings = get_settings()
+_allowed_origins = _settings.get_allowed_origins()
+
+# When an explicit origin list is provided use it with credentials support.
+# When no list is configured, fall back to a restrictive wildcard *without*
+# credentials so the combination is valid (browsers block wildcard + credentials).
+if _allowed_origins:
+    _cors_kwargs = {
+        "allow_origins": _allowed_origins,
+        "allow_credentials": True,
+        "allow_methods": ["*"],
+        "allow_headers": ["*"],
+    }
+else:
+    _cors_kwargs = {
+        "allow_origins": ["*"],
+        "allow_credentials": False,
+        "allow_methods": ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "X-Gate-API-Key", "X-Request-ID", "Authorization"],
+    }
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Validate production secrets at startup so misconfigured deployments fail loudly.
+    get_settings().validate_production_secrets()
     # Create all tables that don't yet exist (safe to run on every startup)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -40,13 +64,7 @@ app = FastAPI(
 )
 
 app.add_middleware(RequestIDMiddleware)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # tighten in production via ALLOWED_ORIGINS env var
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app.add_middleware(CORSMiddleware, **_cors_kwargs)
 
 app.include_router(assets.router)
 app.include_router(workflows.router)

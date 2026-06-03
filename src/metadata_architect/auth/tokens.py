@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 
 from jose import JWTError, jwt
 
-from metadata_architect.config import get_settings
+from metadata_architect.config import ALLOWED_JWT_ALGORITHMS, get_settings
 
 
 class TokenError(Exception):
@@ -36,7 +36,15 @@ class TokenService:
     def __init__(self) -> None:
         settings = get_settings()
         self._secret = settings.jwt_secret_key
-        self._algorithm = settings.jwt_algorithm
+        algorithm = settings.jwt_algorithm
+        # Guard against algorithm-confusion attacks: reject any algorithm not in
+        # the explicit allowlist (e.g. "none", RS*, ES*).
+        if algorithm not in ALLOWED_JWT_ALGORITHMS:
+            raise ValueError(
+                f"JWT_ALGORITHM '{algorithm}' is not in the allowed set "
+                f"{ALLOWED_JWT_ALGORITHMS}. Update your configuration."
+            )
+        self._algorithm = algorithm
 
     def create_review_token(
         self,
@@ -61,9 +69,16 @@ class TokenService:
         """
         Decode and validate a review token.
         Raises TokenError on expiry, tampering, or wrong type.
+
+        The algorithms list is a fixed allowlist — it is NOT driven by the
+        token header, preventing algorithm-confusion / "alg:none" attacks.
         """
         try:
-            data = jwt.decode(token, self._secret, algorithms=[self._algorithm])
+            data = jwt.decode(
+                token,
+                self._secret,
+                algorithms=list(ALLOWED_JWT_ALGORITHMS),  # fixed allowlist, not from token
+            )
         except JWTError as exc:
             raise TokenError(f"Invalid or expired review token: {exc}") from exc
 

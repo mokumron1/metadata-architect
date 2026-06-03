@@ -15,14 +15,31 @@ import logging
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from metadata_architect.config import get_settings
 from metadata_architect.database import get_db
 from metadata_architect.models.asset_registry import Asset, AssetType, SmeWorkflow, WorkflowStatus
 from metadata_architect.parsers.schema_parser import SchemaParser, SchemaParseError
+
+
+def _require_api_key(
+    x_gate_api_key: Annotated[str | None, Header()] = None,
+) -> str:
+    """Require a valid X-Gate-API-Key header for batch ingestion."""
+    settings = get_settings()
+    if not x_gate_api_key or x_gate_api_key != settings.gate_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing or invalid X-Gate-API-Key header.",
+        )
+    return x_gate_api_key
+
+
+ApiKeyDep = Annotated[str, Depends(_require_api_key)]
 
 log = logging.getLogger(__name__)
 
@@ -83,7 +100,7 @@ class BatchIngestResponse(BaseModel):
     status_code=status.HTTP_202_ACCEPTED,
     summary="Batch-register assets and enqueue AI drafting",
 )
-async def batch_ingest(body: BatchIngestRequest, db: DbDep) -> BatchIngestResponse:
+async def batch_ingest(body: BatchIngestRequest, _: ApiKeyDep, db: DbDep) -> BatchIngestResponse:
     """
     Register up to 200 assets and (optionally) queue AI metadata drafting for each.
 

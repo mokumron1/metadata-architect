@@ -15,11 +15,12 @@ import hashlib
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from metadata_architect.config import get_settings
 from metadata_architect.database import get_db
 from metadata_architect.models.asset_registry import (
     Asset,
@@ -36,6 +37,22 @@ from metadata_architect.schemas.asset_schemas import (
     SmeWorkflowRead,
     WorkflowTransitionRequest,
 )
+
+
+def _require_api_key(
+    x_gate_api_key: Annotated[str | None, Header()] = None,
+) -> str:
+    """Require a valid X-Gate-API-Key header for write/destructive operations."""
+    settings = get_settings()
+    if not x_gate_api_key or x_gate_api_key != settings.gate_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing or invalid X-Gate-API-Key header.",
+        )
+    return x_gate_api_key
+
+
+ApiKeyDep = Annotated[str, Depends(_require_api_key)]
 
 router = APIRouter(prefix="/assets", tags=["assets"])
 
@@ -153,7 +170,7 @@ async def update_asset(asset_id: uuid.UUID, body: AssetUpdate, db: DbDep) -> Ass
 
 
 @router.delete("/{asset_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_asset(asset_id: uuid.UUID, db: DbDep) -> None:
+async def delete_asset(asset_id: uuid.UUID, _: ApiKeyDep, db: DbDep) -> None:
     asset = await _get_asset_or_404(db, asset_id)
     await db.delete(asset)
     await db.commit()

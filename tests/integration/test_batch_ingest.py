@@ -12,8 +12,11 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import select
 
+from metadata_architect.config import get_settings
 from metadata_architect.models.asset_registry import Asset, SmeWorkflow, WorkflowStatus
 
+_GATE_KEY = get_settings().gate_api_key
+_HEADERS = {"x-gate-api-key": _GATE_KEY}
 
 _DDL = (
     "CREATE TABLE finance.test_{tag} ("
@@ -44,6 +47,7 @@ class TestBatchIngest:
         resp = await self.client.post(
             "/batch/ingest",
             json={"assets": [_make_asset(uuid.uuid4().hex[:8])], "enqueue_drafting": False},
+            headers=_HEADERS,
         )
         assert resp.status_code == 202
 
@@ -52,6 +56,7 @@ class TestBatchIngest:
         resp = await self.client.post(
             "/batch/ingest",
             json={"assets": assets, "enqueue_drafting": False},
+            headers=_HEADERS,
         )
         data = resp.json()
         assert data["created"] == 3
@@ -63,6 +68,7 @@ class TestBatchIngest:
         resp = await self.client.post(
             "/batch/ingest",
             json={"assets": assets, "enqueue_drafting": False},
+            headers=_HEADERS,
         )
         data = resp.json()
         assert len(data["results"]) == 4
@@ -72,6 +78,7 @@ class TestBatchIngest:
         resp = await self.client.post(
             "/batch/ingest",
             json={"assets": [_make_asset(tag)], "enqueue_drafting": False},
+            headers=_HEADERS,
         )
         result = resp.json()["results"][0]
         assert result["status"] == "created"
@@ -84,11 +91,13 @@ class TestBatchIngest:
         await self.client.post(
             "/batch/ingest",
             json={"assets": [_make_asset(tag)], "enqueue_drafting": False},
+            headers=_HEADERS,
         )
         # Second ingest — same name
         resp = await self.client.post(
             "/batch/ingest",
             json={"assets": [_make_asset(tag)], "enqueue_drafting": False},
+            headers=_HEADERS,
         )
         data = resp.json()
         assert data["skipped"] == 1
@@ -99,6 +108,7 @@ class TestBatchIngest:
         await self.client.post(
             "/batch/ingest",
             json={"assets": [_make_asset(tag)], "enqueue_drafting": False},
+            headers=_HEADERS,
         )
         resp = await self.client.post(
             "/batch/ingest",
@@ -107,6 +117,7 @@ class TestBatchIngest:
                 "enqueue_drafting": False,
                 "skip_existing": False,
             },
+            headers=_HEADERS,
         )
         data = resp.json()
         assert data["errors"] == 1
@@ -117,6 +128,7 @@ class TestBatchIngest:
         resp = await self.client.post(
             "/batch/ingest",
             json={"assets": [_make_asset(t) for t in tags], "enqueue_drafting": False},
+            headers=_HEADERS,
         )
         asset_ids = [r["asset_id"] for r in resp.json()["results"]]
         for aid in asset_ids:
@@ -136,6 +148,7 @@ class TestBatchIngest:
             resp = await self.client.post(
                 "/batch/ingest",
                 json={"assets": [_make_asset(tag)], "enqueue_drafting": True},
+                headers=_HEADERS,
             )
         assert resp.status_code == 202
         assert resp.json()["results"][0]["drafting_queued"] is True
@@ -144,6 +157,7 @@ class TestBatchIngest:
         resp = await self.client.post(
             "/batch/ingest",
             json={"assets": [], "enqueue_drafting": False},
+            headers=_HEADERS,
         )
         assert resp.status_code == 422
 
@@ -161,6 +175,7 @@ class TestBatchIngest:
                 }],
                 "enqueue_drafting": False,
             },
+            headers=_HEADERS,
         )
         # Asset is registered even when DDL parse fails (column_metadata will be null)
         assert resp.json()["created"] == 1
@@ -172,6 +187,7 @@ class TestBatchIngest:
         await self.client.post(
             "/batch/ingest",
             json={"assets": [_make_asset(tag_existing)], "enqueue_drafting": False},
+            headers=_HEADERS,
         )
         # Mix
         resp = await self.client.post(
@@ -180,6 +196,7 @@ class TestBatchIngest:
                 "assets": [_make_asset(tag_existing), _make_asset(tag_new)],
                 "enqueue_drafting": False,
             },
+            headers=_HEADERS,
         )
         data = resp.json()
         assert data["created"] == 1

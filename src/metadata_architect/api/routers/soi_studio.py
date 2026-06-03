@@ -180,10 +180,12 @@ async def generate_soi_options(body: GenerateRequest) -> GenerateResponse:
     try:
         response = client.call(system_blocks, user_msg)
     except Exception as exc:
-        log.exception("soi_studio.generate_failed")
+        # Log the full exception internally but do NOT expose internal details
+        # (e.g. API keys embedded in SDK error messages) to the caller.
+        log.exception("soi_studio.generate_failed error=%s", type(exc).__name__)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Claude API error: {exc}",
+            detail="The AI generation service is temporarily unavailable. Please try again later.",
         )
 
     try:
