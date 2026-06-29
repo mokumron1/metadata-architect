@@ -1,12 +1,24 @@
 import structlog
 from contextlib import asynccontextmanager
+from pathlib import Path
 from dotenv import load_dotenv
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 load_dotenv()
+
+# Inject Windows system cert store so Anthropic SDK SSL works without certifi bundle gaps
+try:
+    import truststore
+    truststore.inject_into_ssl()
+except ImportError:
+    pass
 from fastapi.middleware.cors import CORSMiddleware
 
-from metadata_architect.api.routers import assets, batch, gates, soi_studio, workflows
+_STATIC_DIR = Path(__file__).parent.parent / "static"
+
+from metadata_architect.api.routers import assets, audit, batch, gates, onboarding, soi_studio, workflows
 from metadata_architect.config import get_settings
 from metadata_architect.database import Base, engine
 from metadata_architect.middleware.request_id import RequestIDMiddleware
@@ -16,6 +28,8 @@ from metadata_architect.observability.tracing import setup_tracing
 # Ensure all models are imported so their tables are registered with Base.metadata
 import metadata_architect.models.asset_registry  # noqa: F401
 import metadata_architect.models.soi_studio       # noqa: F401
+import metadata_architect.models.onboarding      # noqa: F401
+import metadata_architect.models.audit           # noqa: F401
 
 configure_logging()
 setup_tracing()
@@ -71,7 +85,19 @@ app.include_router(workflows.router)
 app.include_router(gates.router)
 app.include_router(batch.router)
 app.include_router(soi_studio.router)
+app.include_router(onboarding.router)
+app.include_router(audit.router)
 
+if _STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
+
+@app.get("/", include_in_schema=False)
+async def root():
+    return FileResponse(_STATIC_DIR / "metadata-drafter.html")
+
+@app.get("/audit-viewer", include_in_schema=False)
+async def audit_viewer():
+    return FileResponse(_STATIC_DIR / "audit-viewer.html")
 
 @app.get("/health", tags=["ops"])
 async def health() -> dict:
