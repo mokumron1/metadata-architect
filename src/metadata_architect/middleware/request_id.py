@@ -18,6 +18,7 @@ _HEADER = "X-Request-ID"
 class RequestIDMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
         request_id = request.headers.get(_HEADER) or str(uuid.uuid4())
+        request.state.request_id = request_id
 
         try:
             import structlog

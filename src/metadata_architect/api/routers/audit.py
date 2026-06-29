@@ -9,20 +9,37 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Annotated, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from metadata_architect.config import get_settings
 from metadata_architect.database import get_db
 from metadata_architect.models.audit import AuditLogEntry
 
 router = APIRouter(prefix="/audit", tags=["audit-log"])
 
 
+def _require_audit_key(
+    x_gate_api_key: Annotated[str | None, Header()] = None,
+) -> str:
+    settings = get_settings()
+    if not x_gate_api_key or x_gate_api_key != settings.gate_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing or invalid X-Gate-API-Key header.",
+        )
+    return x_gate_api_key
+
+
+AuditAuth = Annotated[str, Depends(_require_audit_key)]
+
+
 @router.get("/", summary="Query the ISO 27001 audit log")
 async def query_audit_log(
+    _auth: AuditAuth,
     request_id: Optional[str] = Query(None, description="Filter by X-Request-ID"),
     interface: Optional[str] = Query(None, description="METADATA_DRAFTER | SECURITY_TRIAGE | INTERVIEW_BOT | SYSTEM"),
     asset_name: Optional[str] = Query(None, description="Partial match on asset name"),
@@ -78,6 +95,7 @@ async def query_audit_log(
 @router.get("/{request_id}", summary="Get all audit events for a single request")
 async def get_request_audit_trail(
     request_id: str,
+    _auth: AuditAuth,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """

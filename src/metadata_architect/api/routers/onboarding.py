@@ -8,6 +8,8 @@ stream and the audit_log database table.
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import logging
 import time
 import uuid
@@ -27,7 +29,7 @@ from metadata_architect.models.onboarding import (
 )
 from metadata_architect.onboarding.interview_bot import InterviewAnswers, InterviewBot
 from metadata_architect.onboarding.metadata_drafter import ColumnContext, MetadataDrafter
-from metadata_architect.onboarding.security_triage import SecurityTriageAgent
+from metadata_architect.onboarding.security_triage import SecurityTriageAgent, _regex_scan
 from metadata_architect.schemas.onboarding_schemas import (
     ColumnApprovalRequest,
     ColumnApprovalResponse,
@@ -54,6 +56,10 @@ _now = lambda: datetime.now(timezone.utc)
 
 
 def _request_id(request: Request) -> str:
+    # Prefer the ID already computed (and bound to structlog) by RequestIDMiddleware.
+    rid = getattr(request.state, "request_id", None)
+    if rid:
+        return rid
     return request.headers.get("x-request-id", str(uuid.uuid4()))
 
 
@@ -106,7 +112,7 @@ async def draft_metadata(
     t = audit.timer()
     try:
         with t:
-            result = drafter.draft(col)
+            result = await asyncio.to_thread(drafter.draft, col)
     except Exception as exc:
         await audit.event("MD_LLM_CALL_FAILED", outcome=Outcome.FAILURE, details={
             "error": str(exc),
@@ -248,7 +254,7 @@ async def draft_metadata_batch(
     t = audit.timer()
     try:
         with t:
-            results = drafter.draft_batch(cols)
+            results = await asyncio.to_thread(drafter.draft_batch, cols)
     except Exception as exc:
         await audit.event("MD_LLM_CALL_FAILED", outcome=Outcome.FAILURE,
                           details={"error": str(exc)})
@@ -258,6 +264,12 @@ async def draft_metadata_batch(
     await audit.event("MD_LLM_CALL_COMPLETED", duration_ms=t.ms, details={
         "drafted_count": len(results),
     })
+
+    if len(results) != len(body.columns):
+        raise HTTPException(
+            status_code=502,
+            detail=f"Batch drafting returned {len(results)} results for {len(body.columns)} columns.",
+        )
 
     drafts: list[MetadataDraftResponse] = []
     auto_count = 0
@@ -273,7 +285,6 @@ async def draft_metadata_batch(
             model_used=result.model_used,
         )
         db.add(record)
-        await db.flush()
 
         if result.is_auto_approvable:
             auto_count += 1
@@ -409,7 +420,6 @@ async def triage_security(
     })
 
     # ── Milestone 2: fingerprint ──────────────────────────────────────
-    import hashlib
     fingerprint = hashlib.sha256(body.payload_sample[:4096].encode()).hexdigest()
     await audit.event("ST_PAYLOAD_FINGERPRINTED", details={
         "fingerprint": fingerprint,
@@ -417,7 +427,6 @@ async def triage_security(
     })
 
     # ── Milestone 3: regex scan ───────────────────────────────────────
-    from metadata_architect.onboarding.security_triage import _regex_scan
     await audit.event("ST_REGEX_SCAN_STARTED")
 
     t = audit.timer()
@@ -449,10 +458,11 @@ async def triage_security(
     t2 = audit.timer()
     try:
         with t2:
-            passport = agent.triage(
-                asset_name=body.asset_name,
-                payload_text=body.payload_sample,
-                field_metadata=body.field_metadata or None,
+            passport = await asyncio.to_thread(
+                agent.triage,
+                body.asset_name,
+                body.payload_sample,
+                body.field_metadata or None,
             )
     except Exception as exc:
         await audit.event("ST_SEMANTIC_ANALYSIS_FAILED", outcome=Outcome.FAILURE,
@@ -647,7 +657,7 @@ async def run_interview(
     t = audit.timer()
     try:
         with t:
-            draft = bot.generate_contract(answers)
+            draft = await asyncio.to_thread(bot.generate_contract, answers)
     except Exception as exc:
         await audit.event("IB_LLM_EXTRACTION_FAILED", outcome=Outcome.FAILURE,
                           details={"error": str(exc)})
@@ -798,7 +808,12 @@ async def activate_contract(
         "supersede":  "IB_CONTRACT_SUPERSEDED",
         "terminate":  "IB_CONTRACT_TERMINATED",
     }
-    record.status = "active" if body.action == "activate" else body.action
+    _status_map = {
+        "activate":  "active",
+        "supersede": "superseded",
+        "terminate": "terminated",
+    }
+    record.status = _status_map[body.action]
     if body.action == "activate":
         record.activated_at = _now()
 

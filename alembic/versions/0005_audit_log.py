@@ -9,6 +9,20 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
+
+def _uuid():
+    """Return dialect-appropriate UUID column type."""
+    if op.get_bind().dialect.name == "postgresql":
+        return postgresql.UUID(as_uuid=True)
+    return sa.String(36)
+
+
+def _jsonb():
+    """Return dialect-appropriate JSON column type."""
+    if op.get_bind().dialect.name == "postgresql":
+        return postgresql.JSONB()
+    return sa.Text()
+
 revision = "0005"
 down_revision = "0004"
 branch_labels = None
@@ -18,7 +32,7 @@ depends_on = None
 def upgrade() -> None:
     op.create_table(
         "audit_log",
-        sa.Column("id",                postgresql.UUID(as_uuid=True), nullable=False),
+        sa.Column("id",                _uuid(),        nullable=False),
         sa.Column("event_id",          sa.String(64),  nullable=False),
         sa.Column("request_id",        sa.String(64),  nullable=False),
         sa.Column("sequence",          sa.Integer,     nullable=False),
@@ -30,7 +44,7 @@ def upgrade() -> None:
         sa.Column("outcome",           sa.String(16),  nullable=False),
         sa.Column("severity",          sa.String(16),  nullable=False),
         sa.Column("risk_level",        sa.String(16),  nullable=False),
-        sa.Column("details",           postgresql.JSONB, nullable=False, server_default="{}"),
+        sa.Column("details",           _jsonb(),       nullable=False, server_default="{}"),
         sa.Column("duration_ms",       sa.Float,       nullable=True),
         sa.Column("timestamp",         sa.DateTime(timezone=True), nullable=False),
         sa.PrimaryKeyConstraint("id"),

@@ -479,6 +479,11 @@ class TestOnboardingAPI:
 class TestAuditLog:
     """Verify that audit events are written for every interface."""
 
+    @pytest.fixture(autouse=True)
+    def _audit_headers(self):
+        from metadata_architect.config import get_settings
+        self._audit_hdrs = {"X-Gate-API-Key": get_settings().gate_api_key}
+
     @pytest.mark.asyncio
     async def test_audit_events_written_on_draft(self, async_client):
         """Metadata Drafter writes multiple audit events; /audit/{req_id} returns them."""
@@ -508,7 +513,7 @@ class TestAuditLog:
             )
         assert resp.status_code == 201
 
-        audit_resp = await async_client.get(f"/audit/{req_id}")
+        audit_resp = await async_client.get(f"/audit/{req_id}", headers=self._audit_hdrs)
         assert audit_resp.status_code == 200
         data = audit_resp.json()
         assert data["request_id"] == req_id
@@ -531,7 +536,7 @@ class TestAuditLog:
         )
         assert resp.status_code == 201
 
-        audit_resp = await async_client.get(f"/audit/{req_id}")
+        audit_resp = await async_client.get(f"/audit/{req_id}", headers=self._audit_hdrs)
         assert audit_resp.status_code == 200
         data = audit_resp.json()
         codes = [e["event_code"] for e in data["entries"]]
@@ -553,6 +558,7 @@ class TestAuditLog:
         query_resp = await async_client.get(
             "/audit/",
             params={"request_id": req_id, "interface": "SECURITY_TRIAGE"},
+            headers=self._audit_hdrs,
         )
         assert query_resp.status_code == 200
         data = query_resp.json()
@@ -569,7 +575,7 @@ class TestAuditLog:
             headers={"X-Request-ID": req_id},
         )
 
-        audit_resp = await async_client.get(f"/audit/{req_id}")
+        audit_resp = await async_client.get(f"/audit/{req_id}", headers=self._audit_hdrs)
         seqs = [e["sequence"] for e in audit_resp.json()["entries"]]
         assert seqs == sorted(seqs)
         assert seqs == list(range(1, len(seqs) + 1))

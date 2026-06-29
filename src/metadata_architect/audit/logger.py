@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import structlog
+from fastapi import Request  # noqa: F401 — used in make_audit_logger signature below
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from metadata_architect.audit.events import Interface, Outcome, RiskLevel, Severity, lookup
@@ -181,7 +182,7 @@ def make_audit_logger(
             await audit.event("MD_REQUEST_RECEIVED", details={"column": body.column_name})
     """
     async def _dep(
-        request: "fastapi.Request",  # type: ignore[name-defined]
+        request: Request,
         db: AsyncSession,
     ) -> AuditLogger:
         request_id = (

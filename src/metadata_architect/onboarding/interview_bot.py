@@ -235,39 +235,70 @@ class InterviewBot:
         schema_hints: list[SchemaHint],
         business_decision: str,
     ) -> str:
-        schema_lines = [f"  - name: {answers.asset_name}", "    fields:"]
+        """Build ODCS YAML programmatically to prevent injection via user/LLM strings."""
+        import io
+        from ruamel.yaml.comments import CommentedMap, CommentedSeq
+
+        doc = CommentedMap()
+        doc["apiVersion"] = "v3.0.0"
+        doc["kind"] = "DataContract"
+        doc["id"] = contract_id
+        doc["status"] = "draft"
+        doc["version"] = "1.0.0"
+        doc["name"] = answers.asset_name
+        doc["description"] = business_decision
+        doc["owner"] = answers.owner or "unknown"
+        doc["domain"] = data.get("soi_category", "")
+
+        # schema
+        schema_entry = CommentedMap()
+        schema_entry["name"] = answers.asset_name
+        fields_seq = CommentedSeq()
         for h in schema_hints:
-            schema_lines += [
-                f"      - name: {h.field}",
-                f"        type: {h.type}",
-                f"        required: {'true' if h.required else 'false'}",
-                f"        description: \"{h.description}\"",
-            ]
-        schema_block = "\n".join(schema_lines)
+            f = CommentedMap()
+            f["name"] = h.field
+            f["type"] = h.type
+            f["required"] = h.required
+            f["description"] = h.description
+            fields_seq.append(f)
+        schema_entry["fields"] = fields_seq
+        doc["schema"] = [schema_entry]
 
-        mandatory = json.dumps(data.get("mandatory_fields", []))
+        # quality
+        completeness = CommentedMap()
+        completeness["type"] = "completeness"
+        completeness["fields"] = data.get("mandatory_fields", [])
+        completeness["threshold"] = float(data.get("quality_completeness_threshold", 0.95))
+        freshness = CommentedMap()
+        freshness["type"] = "freshness"
+        freshness["maxAge"] = str(data.get("freshness_max_age", "P1D"))
+        doc["quality"] = [completeness, freshness]
 
-        rendered = ODCS_YAML_TEMPLATE.format(
-            contract_id=contract_id,
-            asset_name=answers.asset_name,
-            business_decision=business_decision.replace('"', '\\"'),
-            owner=answers.owner or "unknown",
-            soi_category=data.get("soi_category", ""),
-            schema_block=schema_block,
-            mandatory_fields_yaml=mandatory,
-            completeness_threshold=data.get("quality_completeness_threshold", 0.95),
-            freshness_max_age=data.get("freshness_max_age", "P1D"),
-            update_frequency=data.get("update_frequency_iso8601", "P1D"),
-            retention=data.get("retention_period", "P7Y"),
-            availability=data.get("availability_sla_pct", 99.9),
-            support_contact=answers.support_contact or "",
-        )
+        # sla
+        sla = CommentedMap()
+        sla["updateFrequency"] = str(data.get("update_frequency_iso8601", "P1D"))
+        sla["retention"] = str(data.get("retention_period", "P7Y"))
+        sla["availability"] = float(data.get("availability_sla_pct", 99.9))
+        sla["supportContact"] = answers.support_contact or ""
+        doc["sla"] = sla
 
-        # Validate the YAML is parseable before returning
+        # tags
+        doc["tags"] = [
+            {"soi_category": data.get("soi_category", "")},
+            {"generated_by": "metadata-architect-interview-bot"},
+            {"contract_version": "1.0.0"},
+        ]
+
+        buf = io.StringIO()
+        yaml = _YAML()
+        yaml.default_flow_style = False
+        yaml.dump(doc, buf)
+        rendered = buf.getvalue()
+
+        # Validate — any remaining parse failure is a hard error, not a silent warning
         try:
-            import io
             _YAML().load(io.StringIO(rendered))
         except Exception as exc:
-            log.warning("interview_bot.yaml_parse_error", extra={"error": str(exc)})
+            raise ValueError(f"ODCS YAML generation produced invalid output: {exc}") from exc
 
         return rendered

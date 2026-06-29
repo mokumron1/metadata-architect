@@ -117,9 +117,19 @@ class SecurityPassport:
 
 def _anonymise(text: str) -> str:
     """Replace digit runs and common name patterns before logging as evidence."""
-    text = re.sub(r"\d{4,}", lambda m: "X" * len(m.group()), text)
+    text = re.sub(r"\d+", lambda m: "X" * len(m.group()), text)
     text = re.sub(r"\b[A-Z][a-z]+ [A-Z][a-z]+\b", "[NAME]", text)
     return text
+
+
+def _normalize_classification(raw: str) -> str:
+    """Map Claude's classification string to a known hierarchy value.
+
+    Returns 'Internal' for any unrecognised value so _upgrade_classification
+    and SecurityClassification() never raise on unexpected LLM output.
+    """
+    canonical = {c.lower(): c for c in _CLASSIFICATION_HIERARCHY}
+    return canonical.get(raw.strip().lower(), "Internal")
 
 
 def _regex_scan(text: str) -> list[RiskSignal]:
@@ -186,7 +196,10 @@ class SecurityTriageAgent:
                 classification = _upgrade_classification(
                     classification, _SIGNAL_TO_CLASSIFICATION[sig.signal_type]
                 )
-            quarantine = classification == "Restricted"
+            # Always quarantine when a critical signal is present regardless of
+            # classification level — SSN maps to "Confidential" but must still
+            # be quarantined (it satisfies the hard stop for critical PII/PCI/PHI).
+            quarantine = True
             return SecurityPassport(
                 asset_name=asset_name,
                 classification=SecurityClassification(classification),
@@ -233,7 +246,7 @@ class SecurityTriageAgent:
         response = self._client.call(system_blocks, user_message)
         data = response.parse_json()
 
-        classification = data.get("classification", "Internal")
+        classification = _normalize_classification(data.get("classification", "Internal"))
         for sig in regex_signals:
             classification = _upgrade_classification(
                 classification, _SIGNAL_TO_CLASSIFICATION[sig.signal_type]
@@ -250,6 +263,12 @@ class SecurityTriageAgent:
             for s in data.get("risk_signals", [])
         ]
         all_signals = regex_signals + semantic_signals
+        # Upgrade classification using semantic signals too (not just regex signals)
+        for sig in semantic_signals:
+            stype = sig.signal_type if sig.signal_type in _SIGNAL_TO_CLASSIFICATION else "none"
+            classification = _upgrade_classification(
+                classification, _SIGNAL_TO_CLASSIFICATION[stype]
+            )
         quarantine = data.get("quarantine_recommended", False) or any(
             s.severity in ("high", "critical") for s in all_signals
         )
