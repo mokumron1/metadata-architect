@@ -1,0 +1,873 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ISO 27001 Audit Log Viewer</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:          #0f1117;
+      --surface:     #1a1d27;
+      --surface2:    #232638;
+      --surface3:    #2a2e45;
+      --border:      #2e3250;
+      --accent:      #6c63ff;
+      --accent-glow: rgba(108,99,255,.25);
+      --green:       #22c55e;
+      --green-dim:   rgba(34,197,94,.12);
+      --amber:       #f59e0b;
+      --amber-dim:   rgba(245,158,11,.12);
+      --red:         #ef4444;
+      --red-dim:     rgba(239,68,68,.12);
+      --sky:         #38bdf8;
+      --sky-dim:     rgba(56,189,248,.12);
+      --purple:      #a78bfa;
+      --purple-dim:  rgba(167,139,250,.12);
+      --text:        #e2e8f0;
+      --text-muted:  #64748b;
+      --text-dim:    #94a3b8;
+      --radius:      10px;
+      --font:        'Inter', system-ui, sans-serif;
+      --mono:        'JetBrains Mono', 'Fira Code', monospace;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 14px;
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+
+    /* ── Layout ─────────────────────────────────────────────────────── */
+    .app { max-width: 1200px; margin: 0 auto; padding: 32px 24px 80px; }
+
+    /* ── Header ─────────────────────────────────────────────────────── */
+    .header {
+      display: flex; align-items: center; gap: 16px;
+      margin-bottom: 32px; padding-bottom: 24px;
+      border-bottom: 1px solid var(--border);
+    }
+    .header-icon {
+      width: 48px; height: 48px; background: var(--accent);
+      border-radius: var(--radius); display: flex; align-items: center;
+      justify-content: center; font-size: 22px;
+      box-shadow: 0 0 20px var(--accent-glow); flex-shrink: 0;
+    }
+    .header h1 { font-size: 22px; font-weight: 700; letter-spacing: -.3px; }
+    .header p  { color: var(--text-muted); font-size: 13px; margin-top: 2px; }
+    .iso-badge {
+      margin-left: auto;
+      padding: 4px 12px; border-radius: 99px;
+      font-size: 11px; font-weight: 600; letter-spacing: .5px;
+      background: rgba(108,99,255,.15); color: var(--accent);
+      border: 1px solid rgba(108,99,255,.3);
+    }
+
+    /* ── Nav tabs ───────────────────────────────────────────────────── */
+    .nav-tabs {
+      display: flex; gap: 4px; margin-bottom: 28px;
+      background: var(--surface); border-radius: var(--radius);
+      padding: 4px; border: 1px solid var(--border);
+    }
+    .nav-tab {
+      flex: 1; padding: 10px 16px; border-radius: 8px;
+      background: none; border: none; color: var(--text-dim);
+      font: 500 13px var(--font); cursor: pointer; transition: all .18s;
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+    }
+    .nav-tab:hover   { color: var(--text); background: var(--surface2); }
+    .nav-tab.active  { background: var(--accent); color: #fff;
+                       box-shadow: 0 0 12px var(--accent-glow); }
+
+    /* ── Card ───────────────────────────────────────────────────────── */
+    .card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 24px; margin-bottom: 20px;
+    }
+    .card-title {
+      font-size: 13px; font-weight: 600; color: var(--text-dim);
+      text-transform: uppercase; letter-spacing: .7px; margin-bottom: 18px;
+    }
+
+    /* ── Form controls ──────────────────────────────────────────────── */
+    .field { margin-bottom: 16px; }
+    label  { display: block; font-size: 12px; font-weight: 600;
+             color: var(--text-dim); margin-bottom: 6px; letter-spacing: .3px; }
+
+    input[type=text], input[type=datetime-local] {
+      width: 100%; padding: 10px 14px; background: var(--surface2);
+      border: 1px solid var(--border); border-radius: 8px;
+      color: var(--text); font: 14px var(--font); transition: border-color .18s;
+    }
+    input:focus { outline: none; border-color: var(--accent);
+                  box-shadow: 0 0 0 3px var(--accent-glow); }
+
+    .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    @media (max-width: 600px) { .field-row { grid-template-columns: 1fr; } }
+
+    /* ── Buttons ────────────────────────────────────────────────────── */
+    .btn {
+      padding: 10px 22px; border-radius: 8px; border: none; font: 600 13px var(--font);
+      cursor: pointer; transition: all .18s; display: inline-flex;
+      align-items: center; gap: 8px;
+    }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-primary:hover { filter: brightness(1.12);
+                         box-shadow: 0 0 16px var(--accent-glow); }
+    .btn-primary:disabled { opacity: .45; cursor: not-allowed; filter: none; }
+    .btn-ghost  { background: var(--surface2); color: var(--text-dim);
+                  border: 1px solid var(--border); }
+    .btn-ghost:hover { color: var(--text); border-color: var(--accent); }
+    .btn-sm { padding: 6px 14px; font-size: 12px; }
+
+    /* ── Search actions row ─────────────────────────────────────────── */
+    .search-actions {
+      display: flex; align-items: center; gap: 12px; margin-top: 8px;
+    }
+    .result-count {
+      margin-left: auto; font-size: 12px; color: var(--text-muted);
+    }
+
+    /* ── Status indicator ───────────────────────────────────────────── */
+    .spinner {
+      display: inline-block; width: 16px; height: 16px;
+      border: 2px solid rgba(108,99,255,.3);
+      border-top-color: var(--accent);
+      border-radius: 50%; animation: spin .7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Request summary table (time-period results) ─────────────────── */
+    .request-table-wrap {
+      overflow-x: auto; border-radius: var(--radius);
+      border: 1px solid var(--border);
+    }
+    table.request-table {
+      width: 100%; border-collapse: collapse; font-size: 13px;
+    }
+    table.request-table thead {
+      background: var(--surface2);
+    }
+    table.request-table th {
+      padding: 10px 14px; text-align: left; font-weight: 600;
+      color: var(--text-dim); font-size: 11px; letter-spacing: .5px;
+      text-transform: uppercase; border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    table.request-table tbody tr {
+      border-bottom: 1px solid var(--border);
+      transition: background .12s; cursor: pointer;
+    }
+    table.request-table tbody tr:last-child { border-bottom: none; }
+    table.request-table tbody tr:hover { background: var(--surface2); }
+    table.request-table tbody tr.selected { background: rgba(108,99,255,.12);
+      border-left: 3px solid var(--accent); }
+    table.request-table td {
+      padding: 10px 14px; vertical-align: middle;
+    }
+    .req-id-cell {
+      font-family: var(--mono); font-size: 12px; color: var(--sky);
+      white-space: nowrap;
+    }
+
+    /* ── Event trail table ──────────────────────────────────────────── */
+    .trail-header {
+      display: flex; align-items: center; gap: 12px; margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+    .trail-title { font-size: 15px; font-weight: 700; flex: 1; min-width: 0; }
+    .trail-req-id {
+      font-family: var(--mono); font-size: 11px; color: var(--sky);
+      background: var(--sky-dim); padding: 3px 10px; border-radius: 6px;
+      word-break: break-all;
+    }
+
+    table.event-table {
+      width: 100%; border-collapse: collapse; font-size: 12.5px;
+    }
+    table.event-table thead { background: var(--surface2); }
+    table.event-table th {
+      padding: 9px 12px; text-align: left; font-weight: 600;
+      color: var(--text-dim); font-size: 11px; letter-spacing: .4px;
+      text-transform: uppercase; border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    table.event-table tbody tr {
+      border-bottom: 1px solid rgba(46,50,80,.5);
+      transition: background .1s; cursor: pointer;
+    }
+    table.event-table tbody tr:last-child { border-bottom: none; }
+    table.event-table tbody tr:hover { background: var(--surface2); }
+    table.event-table td {
+      padding: 9px 12px; vertical-align: top;
+    }
+    .seq-cell   { color: var(--text-muted); font-family: var(--mono);
+                  font-size: 11px; width: 36px; }
+    .ts-cell    { font-family: var(--mono); font-size: 11px;
+                  color: var(--text-dim); white-space: nowrap; }
+    .code-cell  { font-family: var(--mono); font-size: 12px;
+                  font-weight: 500; white-space: nowrap; }
+    .desc-cell  { color: var(--text-dim); max-width: 280px; }
+    .dur-cell   { font-family: var(--mono); font-size: 11px;
+                  color: var(--text-muted); text-align: right; white-space: nowrap; }
+
+    /* ── Detail panel (expandable row) ──────────────────────────────── */
+    .detail-row td {
+      padding: 0; background: #0f1117;
+    }
+    .detail-inner {
+      padding: 14px 16px; border-top: 1px dashed var(--border);
+      font-family: var(--mono); font-size: 12px; color: var(--text-dim);
+      white-space: pre-wrap; word-break: break-all; line-height: 1.7;
+    }
+
+    /* ── Chips / badges ─────────────────────────────────────────────── */
+    .chip {
+      display: inline-block; padding: 2px 10px; border-radius: 99px;
+      font-size: 11px; font-weight: 600; white-space: nowrap;
+    }
+    .chip-green    { background: var(--green-dim);  color: var(--green);  }
+    .chip-amber    { background: var(--amber-dim);  color: var(--amber);  }
+    .chip-red      { background: var(--red-dim);    color: var(--red);    }
+    .chip-sky      { background: var(--sky-dim);    color: var(--sky);    }
+    .chip-purple   { background: var(--purple-dim); color: var(--purple); }
+    .chip-muted    { background: var(--surface3);   color: var(--text-muted); }
+    .chip-accent   { background: rgba(108,99,255,.15); color: var(--accent); }
+
+    /* Interface label colours */
+    .iface-MD   { background: var(--sky-dim);    color: var(--sky);    }
+    .iface-ST   { background: var(--red-dim);    color: var(--red);    }
+    .iface-IB   { background: var(--purple-dim); color: var(--purple); }
+    .iface-SYS  { background: var(--surface3);   color: var(--text-muted); }
+
+    /* ── Empty / error states ───────────────────────────────────────── */
+    .empty-state {
+      text-align: center; padding: 60px 24px; color: var(--text-muted);
+    }
+    .empty-icon { font-size: 40px; margin-bottom: 12px; opacity: .4; }
+    .empty-state p { font-size: 14px; }
+
+    .error-banner {
+      background: var(--red-dim); border: 1px solid rgba(239,68,68,.3);
+      border-radius: 8px; padding: 12px 16px; color: var(--red);
+      font-size: 13px; margin-bottom: 16px;
+      display: none;
+    }
+    .error-banner.visible { display: block; }
+
+    /* ── Stats row ──────────────────────────────────────────────────── */
+    .stats-row {
+      display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 20px;
+    }
+    .stat-card {
+      flex: 1; min-width: 100px;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 8px; padding: 12px 16px;
+    }
+    .stat-val  { font-size: 22px; font-weight: 700; line-height: 1.2; }
+    .stat-lbl  { font-size: 11px; color: var(--text-muted);
+                 text-transform: uppercase; letter-spacing: .4px; margin-top: 2px; }
+
+    /* ── Copy button ────────────────────────────────────────────────── */
+    .copy-btn {
+      background: none; border: none; color: var(--text-muted);
+      cursor: pointer; padding: 2px 6px; border-radius: 4px;
+      font-size: 12px; transition: color .15s;
+    }
+    .copy-btn:hover { color: var(--sky); }
+
+    /* ── Section divider ────────────────────────────────────────────── */
+    .section-divider {
+      height: 1px; background: var(--border); margin: 28px 0;
+    }
+
+    /* ── Panel slide ────────────────────────────────────────────────── */
+    #trail-panel { display: none; }
+    #trail-panel.visible { display: block; }
+
+    /* ── Highlight flash ────────────────────────────────────────────── */
+    @keyframes rowflash {
+      0%   { background: rgba(108,99,255,.25); }
+      100% { background: transparent; }
+    }
+    .flash { animation: rowflash .6s ease-out; }
+  </style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ── Header ─────────────────────────────────────────────────────── -->
+  <div class="header">
+    <div class="header-icon">🔍</div>
+    <div>
+      <h1>Audit Log Viewer</h1>
+      <p>ISO 27001 A.12.4 — Third-Party Onboarding Suite</p>
+    </div>
+    <span class="iso-badge">ISO 27001</span>
+  </div>
+
+  <!-- ── Mode tabs ──────────────────────────────────────────────────── -->
+  <div class="nav-tabs" role="tablist">
+    <button class="nav-tab active" id="tab-reqid"
+            onclick="switchTab('reqid')" role="tab">
+      🔑 Search by Request ID
+    </button>
+    <button class="nav-tab" id="tab-period"
+            onclick="switchTab('period')" role="tab">
+      📅 Search by Time Period
+    </button>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <!-- TAB 1 — Request ID search                                       -->
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <div id="panel-reqid">
+    <div class="card">
+      <div class="card-title">Enter a Request ID</div>
+      <div class="field">
+        <label for="req-id-input">X-Request-ID (UUID)</label>
+        <input type="text" id="req-id-input"
+               placeholder="e.g. 3fa85f64-5717-4562-b3fc-2c963f66afa6"
+               autocomplete="off" spellcheck="false" />
+      </div>
+      <div class="search-actions">
+        <button class="btn btn-primary" id="btn-reqid-search"
+                onclick="searchByRequestId()">
+          <span>Search</span>
+        </button>
+        <button class="btn btn-ghost btn-sm" onclick="clearTrail()">Clear</button>
+        <span class="result-count" id="reqid-count"></span>
+      </div>
+    </div>
+
+    <div class="error-banner" id="reqid-error"></div>
+    <div id="reqid-trail-area"></div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <!-- TAB 2 — Time-period search                                      -->
+  <!-- ═══════════════════════════════════════════════════════════════ -->
+  <div id="panel-period" style="display:none">
+    <div class="card">
+      <div class="card-title">Define Time Window</div>
+      <div class="field-row">
+        <div class="field">
+          <label for="from-ts">From (UTC)</label>
+          <input type="datetime-local" id="from-ts" />
+        </div>
+        <div class="field">
+          <label for="to-ts">To (UTC)</label>
+          <input type="datetime-local" id="to-ts" />
+        </div>
+      </div>
+      <div class="field-row" style="margin-top:4px">
+        <div class="field">
+          <label for="filter-interface">Interface (optional)</label>
+          <select id="filter-interface"
+            style="width:100%;padding:10px 14px;background:var(--surface2);
+                   border:1px solid var(--border);border-radius:8px;
+                   color:var(--text);font:14px var(--font)">
+            <option value="">All interfaces</option>
+            <option value="METADATA_DRAFTER">Metadata Drafter</option>
+            <option value="SECURITY_TRIAGE">Security Triage</option>
+            <option value="INTERVIEW_BOT">Interview Bot</option>
+            <option value="SYSTEM">System</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="filter-severity">Min Severity (optional)</label>
+          <select id="filter-severity"
+            style="width:100%;padding:10px 14px;background:var(--surface2);
+                   border:1px solid var(--border);border-radius:8px;
+                   color:var(--text);font:14px var(--font)">
+            <option value="">Any severity</option>
+            <option value="INFO">INFO</option>
+            <option value="WARNING">WARNING</option>
+            <option value="ERROR">ERROR</option>
+            <option value="CRITICAL">CRITICAL</option>
+          </select>
+        </div>
+      </div>
+      <div class="search-actions">
+        <button class="btn btn-primary" id="btn-period-search"
+                onclick="searchByPeriod()">
+          <span>Search</span>
+        </button>
+        <button class="btn btn-ghost btn-sm" onclick="setQuickRange(1)">Last 1h</button>
+        <button class="btn btn-ghost btn-sm" onclick="setQuickRange(24)">Last 24h</button>
+        <button class="btn btn-ghost btn-sm" onclick="setQuickRange(168)">Last 7d</button>
+        <span class="result-count" id="period-count"></span>
+      </div>
+    </div>
+
+    <div class="error-banner" id="period-error"></div>
+
+    <!-- Request summary list -->
+    <div id="period-results-area"></div>
+
+    <!-- Trail panel (slides in below the list) -->
+    <div id="trail-panel">
+      <div class="section-divider"></div>
+      <div id="trail-area"></div>
+    </div>
+  </div>
+
+</div><!-- /.app -->
+
+<script>
+'use strict';
+
+const API_BASE = '';
+
+/* ── Utility ──────────────────────────────────────────────────────────── */
+
+function fmtTs(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return d.toISOString().replace('T', ' ').replace('Z', ' UTC').slice(0, 23);
+}
+
+function fmtDur(ms) {
+  if (ms == null) return '';
+  if (ms < 1000) return ms.toFixed(0) + ' ms';
+  return (ms / 1000).toFixed(2) + ' s';
+}
+
+function severityChip(s) {
+  const map = { INFO:'chip-sky', WARNING:'chip-amber', ERROR:'chip-red', CRITICAL:'chip-red' };
+  return `<span class="chip ${map[s] || 'chip-muted'}">${s}</span>`;
+}
+
+function outcomeChip(o) {
+  const map = { SUCCESS:'chip-green', FAILURE:'chip-red',
+                PENDING:'chip-amber', SKIPPED:'chip-muted' };
+  return `<span class="chip ${map[o] || 'chip-muted'}">${o}</span>`;
+}
+
+function ifaceChip(iface) {
+  const labels = {
+    METADATA_DRAFTER: ['MD', 'Metadata Drafter'],
+    SECURITY_TRIAGE:  ['ST', 'Security Triage'],
+    INTERVIEW_BOT:    ['IB', 'Interview Bot'],
+    SYSTEM:           ['SYS','System'],
+  };
+  const [abbr, label] = labels[iface] || ['?', iface];
+  return `<span class="chip iface-${abbr}" title="${label}">${label}</span>`;
+}
+
+function copyText(text) {
+  navigator.clipboard.writeText(text).catch(() => {});
+}
+
+function setLoading(btnId, loading) {
+  const btn = document.getElementById(btnId);
+  if (!btn) return;
+  btn.disabled = loading;
+  btn.innerHTML = loading
+    ? `<span class="spinner"></span> Searching…`
+    : `<span>Search</span>`;
+}
+
+function showError(id, msg) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = '⚠ ' + msg;
+  el.classList.add('visible');
+}
+function hideError(id) {
+  const el = document.getElementById(id);
+  if (el) el.classList.remove('visible');
+}
+
+/* ── Tab switching ────────────────────────────────────────────────────── */
+
+function switchTab(tab) {
+  document.getElementById('panel-reqid').style.display  = tab === 'reqid'  ? '' : 'none';
+  document.getElementById('panel-period').style.display = tab === 'period' ? '' : 'none';
+  document.getElementById('tab-reqid').classList.toggle('active',  tab === 'reqid');
+  document.getElementById('tab-period').classList.toggle('active', tab === 'period');
+}
+
+/* ── Quick-range helpers ──────────────────────────────────────────────── */
+
+function setQuickRange(hours) {
+  const now = new Date();
+  const from = new Date(now.getTime() - hours * 3600 * 1000);
+  document.getElementById('to-ts').value   = toLocalInput(now);
+  document.getElementById('from-ts').value = toLocalInput(from);
+}
+
+function toLocalInput(d) {
+  // datetime-local needs YYYY-MM-DDTHH:MM in LOCAL time
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/* ══════════════════════════════════════════════════════════════════════ */
+/* TAB 1 — Search by Request ID                                          */
+/* ══════════════════════════════════════════════════════════════════════ */
+
+async function searchByRequestId() {
+  const id = document.getElementById('req-id-input').value.trim();
+  if (!id) {
+    showError('reqid-error', 'Please enter a Request ID.');
+    return;
+  }
+  hideError('reqid-error');
+  setLoading('btn-reqid-search', true);
+  document.getElementById('reqid-count').textContent = '';
+  document.getElementById('reqid-trail-area').innerHTML = '';
+
+  try {
+    const res = await fetch(`${API_BASE}/audit/${encodeURIComponent(id)}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+    const data = await res.json();
+
+    document.getElementById('reqid-count').textContent =
+      data.event_count
+        ? `${data.event_count} event${data.event_count !== 1 ? 's' : ''} found`
+        : 'No events found for this request ID';
+
+    if (!data.event_count) {
+      document.getElementById('reqid-trail-area').innerHTML = emptyHtml('No events for this Request ID');
+      return;
+    }
+
+    document.getElementById('reqid-trail-area').innerHTML = renderTrail(data.entries, id);
+  } catch (err) {
+    showError('reqid-error', err.message);
+  } finally {
+    setLoading('btn-reqid-search', false);
+  }
+}
+
+function clearTrail() {
+  document.getElementById('req-id-input').value = '';
+  document.getElementById('reqid-trail-area').innerHTML = '';
+  document.getElementById('reqid-count').textContent = '';
+  hideError('reqid-error');
+}
+
+// Enter key on request-id input
+document.getElementById('req-id-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') searchByRequestId();
+});
+
+/* ══════════════════════════════════════════════════════════════════════ */
+/* TAB 2 — Search by Time Period                                         */
+/* ══════════════════════════════════════════════════════════════════════ */
+
+// Remember which rows we fetched so we can group them
+let _periodEntries = [];
+
+async function searchByPeriod() {
+  const fromEl = document.getElementById('from-ts').value;
+  const toEl   = document.getElementById('to-ts').value;
+  if (!fromEl || !toEl) {
+    showError('period-error', 'Please select both From and To dates.');
+    return;
+  }
+
+  hideError('period-error');
+  setLoading('btn-period-search', true);
+  document.getElementById('period-count').textContent = '';
+  document.getElementById('period-results-area').innerHTML = '';
+  document.getElementById('trail-panel').classList.remove('visible');
+  document.getElementById('trail-area').innerHTML = '';
+
+  // Convert local datetime-local string → ISO UTC string
+  const fromISO = new Date(fromEl).toISOString();
+  const toISO   = new Date(toEl).toISOString();
+
+  const iface = document.getElementById('filter-interface').value;
+  const sev   = document.getElementById('filter-severity').value;
+
+  const params = new URLSearchParams({
+    from_ts: fromISO,
+    to_ts:   toISO,
+    limit:   1000,
+  });
+  if (iface) params.set('interface', iface);
+  if (sev)   params.set('severity', sev);
+
+  try {
+    const res = await fetch(`${API_BASE}/audit/?${params}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+    const data = await res.json();
+
+    _periodEntries = data.entries;
+    document.getElementById('period-count').textContent =
+      `${data.count} event${data.count !== 1 ? 's' : ''} in ${Object.keys(groupByRequest(data.entries)).length} request${Object.keys(groupByRequest(data.entries)).length !== 1 ? 's' : ''}`;
+
+    if (!data.count) {
+      document.getElementById('period-results-area').innerHTML =
+        emptyHtml('No events found in this time window');
+      return;
+    }
+
+    document.getElementById('period-results-area').innerHTML =
+      renderRequestSummaryTable(groupByRequest(data.entries));
+
+  } catch (err) {
+    showError('period-error', err.message);
+  } finally {
+    setLoading('btn-period-search', false);
+  }
+}
+
+/* Group flat events array into { request_id: [events…] } */
+function groupByRequest(entries) {
+  const groups = {};
+  for (const e of entries) {
+    if (!groups[e.request_id]) groups[e.request_id] = [];
+    groups[e.request_id].push(e);
+  }
+  return groups;
+}
+
+/* Render the summary table of unique request IDs */
+function renderRequestSummaryTable(groups) {
+  const rows = Object.entries(groups).map(([rid, evts]) => {
+    evts.sort((a, b) => a.sequence - b.sequence);
+    const ifaces = [...new Set(evts.map(e => e.interface))];
+    const firstTs = evts[0].timestamp;
+    const lastTs  = evts[evts.length - 1].timestamp;
+    const hasErr  = evts.some(e => e.outcome === 'FAILURE' || e.severity === 'ERROR' || e.severity === 'CRITICAL');
+    const assets  = [...new Set(evts.map(e => e.asset_name).filter(Boolean))];
+    return { rid, evts, ifaces, firstTs, lastTs, hasErr, assets };
+  });
+
+  // Sort by first event timestamp desc
+  rows.sort((a, b) => new Date(b.firstTs) - new Date(a.firstTs));
+
+  const statsHtml = renderPeriodStats(rows);
+
+  const tableRows = rows.map(r => `
+    <tr onclick="showRequestTrail('${r.rid}')" id="row-${r.rid}">
+      <td class="req-id-cell">
+        ${r.rid.slice(0, 8)}…
+        <button class="copy-btn" title="Copy full Request ID"
+                onclick="event.stopPropagation();copyText('${r.rid}')">⧉</button>
+      </td>
+      <td>${r.ifaces.map(ifaceChip).join(' ')}</td>
+      <td>${r.assets.map(a => `<span class="chip chip-muted" style="margin:1px">${escHtml(a)}</span>`).join(' ') || '—'}</td>
+      <td style="text-align:center">${r.evts.length}</td>
+      <td>${r.hasErr ? '<span class="chip chip-red">⚠ Error</span>' : '<span class="chip chip-green">OK</span>'}</td>
+      <td class="ts-cell">${fmtTs(r.firstTs)}</td>
+      <td class="ts-cell">${fmtTs(r.lastTs)}</td>
+    </tr>
+  `).join('');
+
+  return `
+    ${statsHtml}
+    <p style="font-size:12px;color:var(--text-muted);margin-bottom:10px">
+      Click a row to view the full event trail for that request.
+    </p>
+    <div class="request-table-wrap">
+      <table class="request-table">
+        <thead>
+          <tr>
+            <th>Request ID</th>
+            <th>Interface</th>
+            <th>Asset(s)</th>
+            <th style="text-align:center">Events</th>
+            <th>Status</th>
+            <th>Started</th>
+            <th>Last Event</th>
+          </tr>
+        </thead>
+        <tbody>${tableRows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderPeriodStats(rows) {
+  const totalEvts = rows.reduce((s, r) => s + r.evts.length, 0);
+  const errorRows = rows.filter(r => r.hasErr).length;
+  const ifaces = {};
+  for (const r of rows) for (const i of r.ifaces) ifaces[i] = (ifaces[i] || 0) + 1;
+  const topIface = Object.entries(ifaces).sort((a,b) => b[1]-a[1])[0];
+
+  return `
+    <div class="stats-row">
+      <div class="stat-card">
+        <div class="stat-val">${rows.length}</div>
+        <div class="stat-lbl">Unique Requests</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-val">${totalEvts}</div>
+        <div class="stat-lbl">Total Events</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-val" style="color:${errorRows > 0 ? 'var(--red)' : 'var(--green)'}">${errorRows}</div>
+        <div class="stat-lbl">Requests w/ Errors</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-val" style="font-size:14px">${topIface ? topIface[0].replace('_', ' ') : '—'}</div>
+        <div class="stat-lbl">Top Interface</div>
+      </div>
+    </div>
+  `;
+}
+
+/* Called when user clicks a row in the summary table */
+function showRequestTrail(rid) {
+  // Highlight selected row
+  document.querySelectorAll('.request-table tbody tr').forEach(r => r.classList.remove('selected'));
+  const row = document.getElementById(`row-${rid}`);
+  if (row) { row.classList.add('selected'); row.classList.add('flash'); }
+
+  const evts = _periodEntries.filter(e => e.request_id === rid);
+  evts.sort((a, b) => a.sequence - b.sequence);
+
+  document.getElementById('trail-panel').classList.add('visible');
+  document.getElementById('trail-area').innerHTML = renderTrail(evts, rid);
+
+  // Scroll trail into view
+  document.getElementById('trail-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+/* ══════════════════════════════════════════════════════════════════════ */
+/* Shared: render event trail                                            */
+/* ══════════════════════════════════════════════════════════════════════ */
+
+function renderTrail(events, requestId) {
+  if (!events.length) return emptyHtml('No events found');
+
+  const totalMs = events.reduce((s, e) => s + (e.duration_ms || 0), 0);
+  const hasErr  = events.some(e => e.outcome === 'FAILURE');
+  const ifaces  = [...new Set(events.map(e => e.interface))];
+  const assets  = [...new Set(events.map(e => e.asset_name).filter(Boolean))];
+  const firstTs = events[0].timestamp;
+  const lastTs  = events[events.length - 1].timestamp;
+  const wallMs  = new Date(lastTs) - new Date(firstTs);
+
+  const headerHtml = `
+    <div class="card" style="margin-bottom:16px">
+      <div class="trail-header">
+        <div class="trail-title">Event Trail</div>
+        <div class="trail-req-id">
+          ${requestId}
+          <button class="copy-btn" title="Copy Request ID"
+                  onclick="copyText('${requestId}')">⧉</button>
+        </div>
+      </div>
+      <div class="stats-row" style="margin-bottom:0">
+        <div class="stat-card">
+          <div class="stat-val">${events.length}</div>
+          <div class="stat-lbl">Events</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-val" style="color:${hasErr ? 'var(--red)' : 'var(--green)'}">
+            ${hasErr ? '⚠ Error' : '✓ OK'}
+          </div>
+          <div class="stat-lbl">Outcome</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-val" style="font-size:14px">${fmtDur(wallMs) || '< 1 ms'}</div>
+          <div class="stat-lbl">Wall Time</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-val" style="font-size:14px">${ifaces.map(ifaceChip).join(' ')}</div>
+          <div class="stat-lbl">Interface</div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const eventRows = events.map((e, idx) => {
+    const detailsJson = Object.keys(e.details || {}).length
+      ? JSON.stringify(e.details, null, 2) : null;
+    const detailId = `detail-${requestId.slice(0,8)}-${e.sequence}`;
+
+    return `
+      <tr onclick="toggleDetail('${detailId}')" title="Click to ${detailsJson ? 'expand details' : 'no details'}">
+        <td class="seq-cell">#${e.sequence}</td>
+        <td class="ts-cell">${fmtTs(e.timestamp)}</td>
+        <td class="code-cell" style="color:${codeColor(e.event_code)}">${e.event_code}</td>
+        <td class="desc-cell">${escHtml(e.event_description)}</td>
+        <td>${outcomeChip(e.outcome)}</td>
+        <td>${severityChip(e.severity)}</td>
+        <td class="dur-cell">${fmtDur(e.duration_ms)}</td>
+        <td style="text-align:center;color:var(--text-muted);font-size:11px">
+          ${detailsJson ? '▸' : ''}
+        </td>
+      </tr>
+      ${detailsJson ? `
+        <tr class="detail-row" id="${detailId}" style="display:none">
+          <td colspan="8">
+            <div class="detail-inner">${escHtml(detailsJson)}</div>
+          </td>
+        </tr>` : ''}
+    `;
+  }).join('');
+
+  return `
+    ${headerHtml}
+    <div class="request-table-wrap">
+      <table class="event-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Timestamp (UTC)</th>
+            <th>Event Code</th>
+            <th>Description</th>
+            <th>Outcome</th>
+            <th>Severity</th>
+            <th style="text-align:right">Duration</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>${eventRows}</tbody>
+      </table>
+    </div>
+    <p style="margin-top:10px;font-size:11px;color:var(--text-muted)">
+      ▸ Click any row with a chevron to expand its detail payload.
+    </p>
+  `;
+}
+
+/* Toggle detail row visibility */
+function toggleDetail(id) {
+  const row = document.getElementById(id);
+  if (!row) return;
+  row.style.display = row.style.display === 'none' ? '' : 'none';
+}
+
+/* Map event code prefix to a colour */
+function codeColor(code) {
+  if (!code) return 'var(--text-dim)';
+  if (code.startsWith('MD_')) return 'var(--sky)';
+  if (code.startsWith('ST_')) return 'var(--red)';
+  if (code.startsWith('IB_')) return 'var(--purple)';
+  return 'var(--text-dim)';
+}
+
+function escHtml(s) {
+  if (!s) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function emptyHtml(msg) {
+  return `<div class="empty-state">
+    <div class="empty-icon">📭</div>
+    <p>${msg}</p>
+  </div>`;
+}
+
+/* ── Default: set time range to last 24h ─────────────────────────────── */
+setQuickRange(24);
+</script>
+</body>
+</html>
